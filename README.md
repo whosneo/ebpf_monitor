@@ -62,7 +62,7 @@ cd ebpf
 sudo python3 main.py
 
 # 启动特定监控器
-sudo python3 main.py -m exec,func,syscall,io,open
+sudo python3 main.py -m exec,func,syscall,io,open,interrupt,page_fault
 
 # 监控特定进程
 sudo python3 main.py -p nginx,mysql,redis
@@ -100,13 +100,17 @@ ebpf/
 │   │   ├── func.py                # 内核函数监控
 │   │   ├── syscall.py             # 系统调用监控
 │   │   ├── io.py                  # I/O 操作监控
-│   │   └── open.py                # 文件打开监控
+│   │   ├── open.py                # 文件打开监控
+│   │   ├── interrupt.py           # 中断监控
+│   │   └── page_fault.py          # 页面错误监控
 │   ├── ebpf/                      # eBPF 内核程序
 │   │   ├── exec.c                 # 进程执行监控 eBPF 程序
 │   │   ├── func.c                 # 内核函数监控 eBPF 程序
 │   │   ├── syscall.c              # 系统调用监控 eBPF 程序
 │   │   ├── io.c                   # I/O 操作监控 eBPF 程序
-│   │   └── open.c                 # 文件打开监控 eBPF 程序
+│   │   ├── open.c                 # 文件打开监控 eBPF 程序
+│   │   ├── interrupt.c            # 中断监控 eBPF 程序
+│   │   └── page_fault.c           # 页面错误监控 eBPF 程序
 │   └── utils/                     # 工具模块
 │       ├── application_context.py # 应用上下文（依赖注入）
 │       ├── config_manager.py      # 配置管理器
@@ -202,6 +206,8 @@ ebpf/
 | **syscall** | 系统调用监控 | raw_syscalls tracepoint | 系统调用号、分类、持续时间、返回值、错误状态 |
 | **io** | I/O 操作监控 | syscalls tracepoint | I/O类型、文件描述符、大小、持续时间、吞吐量、错误状态 |
 | **open** | 文件打开监控 | syscalls tracepoint | 文件路径、打开标志、权限、返回值、操作类型 |
+| **interrupt** | 中断监控 | irq/softirq tracepoint | 中断号、类型、持续时间、CPU、中断名称 |
+| **page_fault** | 页面错误监控 | exceptions tracepoint | 内存地址、错误类型、进程信息、CPU |
 
 ### 监控器详细说明
 
@@ -267,6 +273,37 @@ ebpf/
   open:
     enabled: true
     show_failed: true             # 是否显示失败的操作
+  ```
+
+**InterruptMonitor（中断监控）**
+- **机制**：使用 `irq:irq_handler_entry/exit` 和 `irq:softirq_entry/exit` tracepoint
+- **特点**：区分硬件/软件中断，支持延迟测量和CPU亲和性分析
+- **应用场景**：系统性能调优、中断负载均衡、延迟分析
+- **配置示例**：
+  ```yaml
+  interrupt:
+    enabled: true
+    monitor_hardware: true        # 监控硬件中断
+    monitor_software: true        # 监控软中断
+    monitor_timer: true           # 监控定时器中断
+    monitor_network: true         # 监控网络中断
+    monitor_block: true           # 监控块设备中断
+    monitor_migration: false      # 监控进程迁移
+  ```
+
+**PageFaultMonitor（页面错误监控）**
+- **机制**：使用 `exceptions:page_fault_user/kernel` tracepoint
+- **特点**：区分主要/次要页面错误，支持用户/内核空间过滤
+- **应用场景**：内存性能分析、内存压力监控、应用优化
+- **配置示例**：
+  ```yaml
+  page_fault:
+    enabled: true
+    monitor_major_faults: true    # 监控主要页面错误
+    monitor_minor_faults: true    # 监控次要页面错误
+    monitor_write_faults: true    # 监控写错误
+    monitor_user_faults: true     # 监控用户空间错误
+    monitor_kernel_faults: false  # 监控内核空间错误
   ```
 
 ## ⚙️ 配置管理
@@ -346,6 +383,23 @@ monitors:
   open:
     enabled: true
     show_failed: true
+  
+  interrupt:
+    enabled: true
+    monitor_hardware: true
+    monitor_software: true
+    monitor_timer: true
+    monitor_network: true
+    monitor_block: true
+    monitor_migration: false
+  
+  page_fault:
+    enabled: true
+    monitor_major_faults: true
+    monitor_minor_faults: true
+    monitor_write_faults: true
+    monitor_user_faults: true
+    monitor_kernel_faults: false
 ```
 
 ### 配置特点
@@ -367,7 +421,9 @@ output/
 ├── func_20250924_143045.csv      # 内核函数监控数据
 ├── syscall_20250924_143045.csv   # 系统调用监控数据
 ├── io_20250924_143045.csv        # I/O 操作监控数据
-└── open_20250924_143045.csv      # 文件打开监控数据
+├── open_20250924_143045.csv      # 文件打开监控数据
+├── interrupt_20250924_143045.csv # 中断监控数据
+└── page_fault_20250924_143045.csv # 页面错误监控数据
 ```
 
 **ExecMonitor CSV 数据示例**：
@@ -402,6 +458,20 @@ timestamp,time_str,io_type,type_str,fd,size,duration_ns,duration_us,throughput_m
 timestamp,time_str,type,type_str,pid,tid,uid,cpu,comm,flags,mode,ret,filename
 1726123845.789,[2025-09-12 14:30:45.789],1,OPENAT,1234,1234,0,2,nginx,0,0644,3,/var/log/nginx/access.log
 1726123845.890,[2025-09-12 14:30:45.890],0,OPEN,5678,5678,999,1,mysql,2,0644,4,/var/lib/mysql/data.db
+```
+
+**InterruptMonitor CSV 数据示例**：
+```csv
+timestamp,time_str,irq_num,irq_type,irq_type_str,irq_name,comm,pid,tid,duration_ns,duration_us,cpu,softirq_vec,orig_cpu,dest_cpu
+1726123845.991,[2025-09-12 14:30:45.991],0,1,HARDWARE,hw_irq,swapper,0,0,2500,2.5,0,0,,
+1726123846.123,[2025-09-12 14:30:46.123],0,2,SOFTWARE,TIMER,ksoftirqd,10,10,1200,1.2,1,1,,
+```
+
+**PageFaultMonitor CSV 数据示例**：
+```csv
+timestamp,time_str,pid,tid,comm,address,address_hex,fault_type,fault_type_str,cpu,is_major_fault,is_minor_fault,is_write_fault,is_user_fault
+1726123846.234,[2025-09-12 14:30:46.234],1234,1234,nginx,140737488347136,0x7fff00000000,9,MINOR|USER,2,false,true,false,true
+1726123846.345,[2025-09-12 14:30:46.345],5678,5678,mysql,94558428200960,0x55f123456000,10,MAJOR|USER,1,true,false,false,true
 ```
 
 ### 控制台实时输出
