@@ -8,6 +8,8 @@ eBPF 系统监控工具是一个基于 eBPF 技术的现代化系统性能监控
 
 **监控能力**
 - 进程生命周期监控：进程创建、执行、退出
+- 内核函数调用监控：支持通配符模式匹配的函数跟踪
+- 系统调用监控：智能分类、性能阈值和采样策略
 
 **技术优势**
 - 基于 eBPF 内核技术，监控开销极低
@@ -197,17 +199,48 @@ cat output/exec_20250924_143045.csv
 | 监控器 | 功能描述 | 监控对象 | 主要输出字段 |
 |-------|---------|---------|-------------|
 | **exec** | 进程执行监控 | execve系统调用 | 进程ID、命令、参数、用户ID、返回值 |
+| **func** | 内核函数监控 | 指定内核函数 | 进程信息、函数名、调用时间 |
+| **syscall** | 系统调用监控 | 所有系统调用 | 系统调用号、分类、持续时间、返回值、错误状态 |
+
+### 监控器详细说明
+
+**ExecMonitor（进程执行监控）**
+- **功能描述**：监控系统中所有进程的执行事件
+- **监控机制**：使用 `syscalls:sys_enter_execve` 和 `syscalls:sys_exit_execve` tracepoint
+- **特点**：捕获execve系统调用的入口和出口，记录进程执行的完整信息
+- **输出字段**：时间戳、进程名、UID、PID、PPID、返回值、命令行参数
+
+**FuncMonitor（内核函数监控）**
+- **功能描述**：监控指定模式的内核函数调用
+- **监控机制**：使用 kprobe 动态探针技术
+- **特点**：支持通配符模式匹配（如 `vfs_*`），动态生成探针，可配置探针数量限制
+- **输出字段**：时间戳、进程ID、父进程ID、用户ID、进程名、函数名
+
+**SyscallMonitor（系统调用监控）**
+- **功能描述**：监控系统调用执行情况，分析调用模式、性能特征和错误状态
+- **监控机制**：使用 `raw_syscalls:sys_enter` 和 `raw_syscalls:sys_exit` tracepoint
+- **特点**：智能分类（文件IO、网络、内存、进程、信号、时间），支持性能阈值监控和灵活的过滤策略
+- **输出字段**：时间戳、进程信息、系统调用号、分类、持续时间、返回值、错误状态
 
 **使用示例**
 ```bash
 # 监控所有进程执行
 sudo python3 main.py -m exec
 
+# 监控内核函数（VFS相关）
+sudo python3 main.py -m func
+
+# 监控系统调用
+sudo python3 main.py -m syscall
+
+# 同时启动多个监控器
+sudo python3 main.py -m exec,func,syscall
+
 # 监控特定进程
 sudo python3 main.py -m exec -p nginx,apache2
 
-# 监控特定用户的进程执行
-sudo python3 main.py -m exec -u root,www-data
+# 监控特定用户
+sudo python3 main.py -m syscall -u root,www-data
 ```
 
 ## 配置管理

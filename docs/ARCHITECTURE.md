@@ -210,10 +210,10 @@ class ExecMonitor(BaseMonitor):
     ]
 ```
 
-**ExecMonitor（进程执行监控器）**
-- 使用 syscalls tracepoint 机制
-- 支持目标进程和用户过滤
-- 优化的参数解析和事件处理
+**具体监控器实现**
+- **ExecMonitor**：使用 syscalls tracepoint 机制，支持目标过滤和参数解析
+- **FuncMonitor**：使用 kprobe 动态探针，支持通配符模式匹配和动态代码生成
+- **SyscallMonitor**：使用 raw_syscalls tracepoint，支持智能分类和性能阈值
 
 ## eBPF 程序设计
 

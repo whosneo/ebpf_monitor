@@ -62,7 +62,7 @@ cd ebpf
 sudo python3 main.py
 
 # 启动特定监控器
-sudo python3 main.py -m exec
+sudo python3 main.py -m exec,func,syscall
 
 # 监控特定进程
 sudo python3 main.py -p nginx,mysql,redis
@@ -96,9 +96,13 @@ ebpf/
 │   ├── ebpf_monitor.py            # 主监控器类
 │   ├── monitors/                   # 监控器模块
 │   │   ├── base.py                # 监控器基类
-│   │   └── exec.py                # 进程执行监控（当前唯一实现）
+│   │   ├── exec.py                # 进程执行监控
+│   │   ├── func.py                # 内核函数监控
+│   │   └── syscall.py             # 系统调用监控
 │   ├── ebpf/                      # eBPF 内核程序
-│   │   └── exec.c                 # 进程执行监控 eBPF 程序
+│   │   ├── exec.c                 # 进程执行监控 eBPF 程序
+│   │   ├── func.c                 # 内核函数监控 eBPF 程序
+│   │   └── syscall.c              # 系统调用监控 eBPF 程序
 │   └── utils/                     # 工具模块
 │       ├── application_context.py # 应用上下文（依赖注入）
 │       ├── config_manager.py      # 配置管理器
@@ -190,6 +194,51 @@ ebpf/
 | 监控器 | 功能描述 | eBPF机制 | 输出字段 |
 |-------|---------|---------|----------|
 | **exec** | 进程执行监控 | syscalls tracepoint | 时间戳、进程名、UID、PID、PPID、返回值、命令参数 |
+| **func** | 内核函数监控 | kprobe | 时间戳、进程信息、函数名 |
+| **syscall** | 系统调用监控 | raw_syscalls tracepoint | 系统调用号、分类、持续时间、返回值、错误状态 |
+
+### 监控器详细说明
+
+**ExecMonitor（进程执行监控）**
+- **机制**：使用 `syscalls:sys_enter_execve` 和 `syscalls:sys_exit_execve` tracepoint
+- **特点**：捕获进程执行完整信息，包括命令行参数（最多4个）
+- **应用场景**：进程启动监控、安全审计、性能分析
+
+**FuncMonitor（内核函数监控）**
+- **机制**：使用 kprobe 动态探针技术
+- **特点**：支持通配符模式匹配（如 `vfs_*`），动态生成探针，可配置探针数量限制
+- **应用场景**：内核开发调试、性能热点分析、函数调用跟踪
+- **配置示例**：
+  ```yaml
+  func:
+    enabled: true
+    patterns: ["vfs_*", "sys_*"]  # 监控VFS和系统调用相关函数
+    probe_limit: 10               # 最多10个探针
+  ```
+
+**SyscallMonitor（系统调用监控）**
+- **机制**：使用 `raw_syscalls:sys_enter` 和 `raw_syscalls:sys_exit` tracepoint
+- **特点**：智能分类（文件IO、网络、内存、进程、信号、时间），支持性能阈值和采样策略
+- **应用场景**：系统调用性能分析、异常检测、资源使用监控
+- **配置示例**：
+  ```yaml
+  syscall:
+    enabled: true
+    sampling_strategy: "intelligent"
+    monitor_categories:
+      file_io: true
+      network: true
+      memory: true
+      process: true
+      signal: false
+      time: false
+    performance_thresholds:
+      file_io_ms: 1.0
+      network_ms: 5.0
+      memory_ms: 0.5
+      process_ms: 10.0
+      default_us: 100
+  ```
 
 ## ⚙️ 配置管理
 
@@ -234,7 +283,31 @@ output:
 monitors:
   exec:
     enabled: true
-  # 其他监控器配置...
+  
+  func:
+    enabled: true
+    patterns: ["vfs_*"]          # 匹配模式
+    probe_limit: 10              # 最大探针数量
+  
+  syscall:
+    enabled: true
+    sampling_strategy: "intelligent"
+    high_priority_syscalls: [0, 1, 2, 3, 9, 57, 59]
+    monitor_categories:
+      file_io: true
+      network: true
+      memory: true
+      process: true
+      signal: false
+      time: false
+    performance_thresholds:
+      file_io_ms: 1.0
+      network_ms: 5.0
+      memory_ms: 0.5
+      process_ms: 10.0
+      default_us: 100
+    max_events_per_second: 1000
+    show_errors_only: false
 ```
 
 ### 配置特点
@@ -252,7 +325,9 @@ monitors:
 
 ```
 output/
-└── exec_20250924_143045.csv      # 进程执行监控数据
+├── exec_20250924_143045.csv      # 进程执行监控数据
+├── func_20250924_143045.csv      # 内核函数监控数据
+└── syscall_20250924_143045.csv   # 系统调用监控数据
 ```
 
 **ExecMonitor CSV 数据示例**：
@@ -260,6 +335,19 @@ output/
 timestamp,time_str,comm,uid,pid,ppid,ret,argv
 1726123845.123,[2025-09-12 14:30:45.123],nginx,0,1234,1,0,"nginx -g daemon off;"
 1726123845.234,[2025-09-12 14:30:45.234],mysql,999,5678,1,0,"mysqld --defaults-file=/etc/mysql/my.cnf"
+```
+
+**FuncMonitor CSV 数据示例**：
+```csv
+timestamp,time_str,pid,ppid,uid,comm,func_name
+1726123845.345,[2025-09-12 14:30:45.345],1234,1,0,nginx,vfs_read
+1726123845.456,[2025-09-12 14:30:45.456],5678,1,999,mysql,vfs_write
+```
+
+**SyscallMonitor CSV 数据示例**：
+```csv
+timestamp,time_str,monitor_type,pid,tid,cpu,comm,syscall_nr,syscall_name,category,ret_val,error_name,duration_ns,duration_us,duration_ms,is_error,is_slow_call
+1726123845.123,[2025-09-12 14:30:45.123],syscall,1234,1234,2,nginx,2,open,file_io,3,SUCCESS,15000,15.0,0.015,false,false
 ```
 
 ### 控制台实时输出
