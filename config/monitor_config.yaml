@@ -1,0 +1,103 @@
+# 性能监控工具配置
+app:
+  name: ebpf_monitor
+  version: 1.0.0
+  description: eBPF Monitor for Linux
+  author: bwyu
+  email: bwyu@czce.com.cn
+  url: https://github.com/whosneo/ebpf_monitor
+  environment: development
+  debug: true
+
+# 日志配置
+logging:
+  version: 1
+  level: DEBUG                    # DEBUG, INFO, WARNING, ERROR
+  formatters:
+    detailed:
+      format: '%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s'
+    simple:
+      format: '%(levelname)s: %(message)s'
+  handlers: 
+    console:
+      class: logging.StreamHandler
+      formatter: simple
+      stream: ext://sys.stdout
+    file:
+      class: logging.handlers.TimedRotatingFileHandler
+      formatter: detailed
+      filename: monitor.log
+      when: D
+      interval: 1
+      backupCount: 365
+
+# 输出控制器配置
+output:
+  buffer_size: 2000                 # 缓冲区大小，用来处理高频事件
+  flush_interval: 2.0               # 刷新间隔
+  csv_delimiter: ","                # CSV分隔符
+  include_header: true              # 是否包含头部
+
+# 监控器配置
+monitors:
+  # 进程执行监控
+  exec:
+    enabled: true
+
+  # 内核函数监控
+  func:
+    enabled: true
+    patterns: ["vfs_read", "vfs_write"]
+    probe_limit: 10
+
+  # 中断监控
+  interrupt:
+    enabled: true
+    monitor_hardware: true
+    monitor_software: true
+    monitor_timer: true
+    monitor_network: true
+    monitor_block: true
+
+  # IO监控
+  io:
+    enabled: true
+    disk_io: true            # 磁盘IO
+    network_io: true         # 网络IO
+    io_latency: true         # IO延迟
+    queue_depth: true        # 队列深度
+
+  open:
+    enabled: true
+    show_failed: true
+
+  # 内存监控
+  page_fault:
+    enabled: true
+    monitor_major_faults: True           # 是否监控主要页面错误
+    monitor_minor_faults: True           # 是否监控次要页面错误
+    monitor_write_faults: True           # 是否监控写错误
+    monitor_user_faults: True            # 是否监控用户空间错误
+    monitor_kernel_faults: False         # 是否监控内核空间错误
+
+  # 系统调用监控
+  syscall:
+    enabled: true
+    io_calls: true           # IO相关系统调用
+    network_calls: true      # 网络相关系统调用
+    memory_calls: true       # 内存相关系统调用
+    call_latency: true       # 调用延迟
+
+  # TCP监控
+  tcp:
+    enabled: true
+    target_ports: [80, 443, 22]
+    events: ["connect", "accept"]
+    show_failed: true
+
+  # UDP监控
+  udp:
+    enabled: true
+    target_ports: [53, 80, 443]
+    events: ["send", "recv"]
+    min_size: 0
