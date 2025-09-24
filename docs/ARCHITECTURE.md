@@ -214,6 +214,8 @@ class ExecMonitor(BaseMonitor):
 - **ExecMonitor**：使用 syscalls tracepoint 机制，支持目标过滤和参数解析
 - **FuncMonitor**：使用 kprobe 动态探针，支持通配符模式匹配和动态代码生成
 - **SyscallMonitor**：使用 raw_syscalls tracepoint，支持智能分类和性能阈值
+- **IOMonitor**：使用 syscalls tracepoint 监控读写操作，支持延迟和吞吐量测量
+- **OpenMonitor**：使用 syscalls tracepoint 监控文件打开操作，支持权限和状态分析
 
 ## eBPF 程序设计
 

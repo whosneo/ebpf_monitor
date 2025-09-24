@@ -10,6 +10,8 @@ eBPF 系统监控工具是一个基于 eBPF 技术的现代化系统性能监控
 - 进程生命周期监控：进程创建、执行、退出
 - 内核函数调用监控：支持通配符模式匹配的函数跟踪
 - 系统调用监控：智能分类、性能阈值和采样策略
+- I/O 操作监控：读写性能分析、延迟和吞吐量测量
+- 文件操作监控：文件打开、访问权限和状态分析
 
 **技术优势**
 - 基于 eBPF 内核技术，监控开销极低
@@ -201,6 +203,8 @@ cat output/exec_20250924_143045.csv
 | **exec** | 进程执行监控 | execve系统调用 | 进程ID、命令、参数、用户ID、返回值 |
 | **func** | 内核函数监控 | 指定内核函数 | 进程信息、函数名、调用时间 |
 | **syscall** | 系统调用监控 | 所有系统调用 | 系统调用号、分类、持续时间、返回值、错误状态 |
+| **io** | I/O操作监控 | 读写系统调用 | I/O类型、文件描述符、大小、持续时间、吞吐量、错误状态 |
+| **open** | 文件打开监控 | open/openat系统调用 | 文件路径、打开标志、权限、返回值、操作类型 |
 
 ### 监控器详细说明
 
@@ -222,6 +226,18 @@ cat output/exec_20250924_143045.csv
 - **特点**：智能分类（文件IO、网络、内存、进程、信号、时间），支持性能阈值监控和灵活的过滤策略
 - **输出字段**：时间戳、进程信息、系统调用号、分类、持续时间、返回值、错误状态
 
+**IOMonitor（I/O操作监控）**
+- **功能描述**：监控系统中的读写I/O操作
+- **监控机制**：使用 `syscalls:sys_enter/exit_read/write` tracepoint
+- **特点**：测量I/O延迟和吞吐量，支持慢I/O和大I/O检测
+- **输出字段**：时间戳、I/O类型、文件描述符、大小、持续时间、吞吐量、进程信息、返回值、错误状态
+
+**OpenMonitor（文件打开监控）**
+- **功能描述**：监控系统中的文件打开操作
+- **监控机制**：使用 `syscalls:sys_enter/exit_open/openat` tracepoint
+- **特点**：监控文件访问模式、权限和操作状态，支持失败操作过滤
+- **输出字段**：时间戳、操作类型、进程信息、文件路径、打开标志、权限、返回值
+
 **使用示例**
 ```bash
 # 监控所有进程执行
@@ -233,8 +249,14 @@ sudo python3 main.py -m func
 # 监控系统调用
 sudo python3 main.py -m syscall
 
+# 监控I/O操作
+sudo python3 main.py -m io
+
+# 监控文件打开操作
+sudo python3 main.py -m open
+
 # 同时启动多个监控器
-sudo python3 main.py -m exec,func,syscall
+sudo python3 main.py -m exec,func,syscall,io,open
 
 # 监控特定进程
 sudo python3 main.py -m exec -p nginx,apache2
