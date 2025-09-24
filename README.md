@@ -62,7 +62,7 @@ cd ebpf
 sudo python3 main.py
 
 # 启动特定监控器
-sudo python3 main.py -m exec,func,syscall
+sudo python3 main.py -m exec,func,syscall,io,open
 
 # 监控特定进程
 sudo python3 main.py -p nginx,mysql,redis
@@ -98,11 +98,15 @@ ebpf/
 │   │   ├── base.py                # 监控器基类
 │   │   ├── exec.py                # 进程执行监控
 │   │   ├── func.py                # 内核函数监控
-│   │   └── syscall.py             # 系统调用监控
+│   │   ├── syscall.py             # 系统调用监控
+│   │   ├── io.py                  # I/O 操作监控
+│   │   └── open.py                # 文件打开监控
 │   ├── ebpf/                      # eBPF 内核程序
 │   │   ├── exec.c                 # 进程执行监控 eBPF 程序
 │   │   ├── func.c                 # 内核函数监控 eBPF 程序
-│   │   └── syscall.c              # 系统调用监控 eBPF 程序
+│   │   ├── syscall.c              # 系统调用监控 eBPF 程序
+│   │   ├── io.c                   # I/O 操作监控 eBPF 程序
+│   │   └── open.c                 # 文件打开监控 eBPF 程序
 │   └── utils/                     # 工具模块
 │       ├── application_context.py # 应用上下文（依赖注入）
 │       ├── config_manager.py      # 配置管理器
@@ -196,6 +200,8 @@ ebpf/
 | **exec** | 进程执行监控 | syscalls tracepoint | 时间戳、进程名、UID、PID、PPID、返回值、命令参数 |
 | **func** | 内核函数监控 | kprobe | 时间戳、进程信息、函数名 |
 | **syscall** | 系统调用监控 | raw_syscalls tracepoint | 系统调用号、分类、持续时间、返回值、错误状态 |
+| **io** | I/O 操作监控 | syscalls tracepoint | I/O类型、文件描述符、大小、持续时间、吞吐量、错误状态 |
+| **open** | 文件打开监控 | syscalls tracepoint | 文件路径、打开标志、权限、返回值、操作类型 |
 
 ### 监控器详细说明
 
@@ -238,6 +244,29 @@ ebpf/
       memory_ms: 0.5
       process_ms: 10.0
       default_us: 100
+  ```
+
+**IOMonitor（I/O 操作监控）**
+- **机制**：使用 `syscalls:sys_enter_read/write` 和 `syscalls:sys_exit_read/write` tracepoint
+- **特点**：测量I/O延迟和吞吐量，支持慢I/O和大I/O检测
+- **应用场景**：存储性能分析、I/O瓶颈定位、应用优化
+- **配置示例**：
+  ```yaml
+  io:
+    enabled: true
+    slow_io_threshold_us: 10000   # 慢I/O阈值（微秒）
+    large_io_threshold_kb: 64     # 大I/O阈值（KB）
+  ```
+
+**OpenMonitor（文件打开监控）**
+- **机制**：使用 `syscalls:sys_enter/exit_open/openat` tracepoint
+- **特点**：监控文件访问模式、权限和操作状态
+- **应用场景**：文件访问审计、权限分析、安全监控
+- **配置示例**：
+  ```yaml
+  open:
+    enabled: true
+    show_failed: true             # 是否显示失败的操作
   ```
 
 ## ⚙️ 配置管理
@@ -308,6 +337,15 @@ monitors:
       default_us: 100
     max_events_per_second: 1000
     show_errors_only: false
+  
+  io:
+    enabled: true
+    slow_io_threshold_us: 10000
+    large_io_threshold_kb: 64
+  
+  open:
+    enabled: true
+    show_failed: true
 ```
 
 ### 配置特点
@@ -327,7 +365,9 @@ monitors:
 output/
 ├── exec_20250924_143045.csv      # 进程执行监控数据
 ├── func_20250924_143045.csv      # 内核函数监控数据
-└── syscall_20250924_143045.csv   # 系统调用监控数据
+├── syscall_20250924_143045.csv   # 系统调用监控数据
+├── io_20250924_143045.csv        # I/O 操作监控数据
+└── open_20250924_143045.csv      # 文件打开监控数据
 ```
 
 **ExecMonitor CSV 数据示例**：
@@ -348,6 +388,20 @@ timestamp,time_str,pid,ppid,uid,comm,func_name
 ```csv
 timestamp,time_str,monitor_type,pid,tid,cpu,comm,syscall_nr,syscall_name,category,ret_val,error_name,duration_ns,duration_us,duration_ms,is_error,is_slow_call
 1726123845.123,[2025-09-12 14:30:45.123],syscall,1234,1234,2,nginx,2,open,file_io,3,SUCCESS,15000,15.0,0.015,false,false
+```
+
+**IOMonitor CSV 数据示例**：
+```csv
+timestamp,time_str,io_type,type_str,fd,size,duration_ns,duration_us,throughput_mbps,pid,tid,cpu,comm,ret_val,is_error
+1726123845.567,[2025-09-12 14:30:45.567],1,READ,3,4096,25000,25.0,156.25,1234,1234,2,nginx,4096,false
+1726123845.678,[2025-09-12 14:30:45.678],2,WRITE,4,8192,50000,50.0,156.25,5678,5678,1,mysql,8192,false
+```
+
+**OpenMonitor CSV 数据示例**：
+```csv
+timestamp,time_str,type,type_str,pid,tid,uid,cpu,comm,flags,mode,ret,filename
+1726123845.789,[2025-09-12 14:30:45.789],1,OPENAT,1234,1234,0,2,nginx,0,0644,3,/var/log/nginx/access.log
+1726123845.890,[2025-09-12 14:30:45.890],0,OPEN,5678,5678,999,1,mysql,2,0644,4,/var/lib/mysql/data.db
 ```
 
 ### 控制台实时输出
