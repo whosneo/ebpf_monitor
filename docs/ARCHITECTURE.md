@@ -216,6 +216,8 @@ class ExecMonitor(BaseMonitor):
 - **SyscallMonitor**：使用 raw_syscalls tracepoint，支持智能分类和性能阈值
 - **IOMonitor**：使用 syscalls tracepoint 监控读写操作，支持延迟和吞吐量测量
 - **OpenMonitor**：使用 syscalls tracepoint 监控文件打开操作，支持权限和状态分析
+- **InterruptMonitor**：使用 irq/softirq tracepoint 监控硬件和软件中断，支持延迟测量和CPU分析
+- **PageFaultMonitor**：使用 exceptions tracepoint 监控页面错误，支持错误类型分类和内存分析
 
 ## eBPF 程序设计
 
