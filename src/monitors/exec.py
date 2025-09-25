@@ -21,8 +21,8 @@ class ExecEvent(BaseEvent):
         ("uid", ct.c_uint32),  # 用户ID
         ("pid", ct.c_uint32),  # 进程ID
         ("ppid", ct.c_uint32),  # 父进程ID
-        ("ret", ct.c_int),  # 退出码
-        ("argv", ct.c_char * 256),  # 命令行参数 (ARGSIZE = 256)
+        ("ret", ct.c_int32),  # 返回值
+        ("argv", ct.c_char * 256),  # 参数字符串 (ARGSIZE = 256)
     ]
 
 
