@@ -83,11 +83,14 @@ static inline void init_open_event(struct open_event *event) {
 /* 辅助函数：安全读取用户空间字符串 */
 static inline int read_user_filename(char *dest, const char __user *src) {
     __builtin_memset(dest, 0, MAX_FILENAME);
-    int ret = bpf_probe_read_user_str(dest, MAX_FILENAME, src);
+    // 使用bpf_probe_read替代bpf_probe_read_user_str以兼容旧内核
+    int ret = bpf_probe_read(dest, MAX_FILENAME - 1, src);
     if (ret < 0) {
         __builtin_memcpy(dest, "<unknown>", 10);
         return -1;
     }
+    // 确保字符串以null结尾
+    dest[MAX_FILENAME - 1] = '\0';
     return 0;
 }
 

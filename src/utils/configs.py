@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 配置类定义
@@ -8,9 +8,17 @@
 每个配置类都包含自己的验证逻辑。
 """
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Dict, Any, Type
+try:
+    from abc import ABC, abstractmethod
+except ImportError:
+    # Python 2.7 fallback
+    from abc import ABCMeta, abstractmethod
+    ABC = ABCMeta('ABC', (object,), {})
+# 兼容性导入
+try:
+    from typing import Dict, Any, Type
+except ImportError:
+    from ..utils.py2_compat import Dict, Any, Type
 
 from ..monitors.base import BaseMonitor
 
@@ -20,26 +28,36 @@ class ValidatedConfig(ABC):
 
     @classmethod
     @abstractmethod
-    def validate(cls, config: Dict[str, Any]) -> 'ValidatedConfig':
+    def validate(cls, config):
+        # type: (Dict[str, Any]) -> 'ValidatedConfig'
         """验证配置 - 子类需要实现"""
         # noinspection PyAbstractClass
         return ValidatedConfig()
 
 
-@dataclass
 class AppConfig(ValidatedConfig):
     """应用配置"""
-    name: str = "ebpf_monitor"
-    version: str = "1.0.0"
-    description: str = "eBPF Monitor for Linux"
-    author: str = "bwyu"
-    email: str = "bwyu@czce.com.cn"
-    url: str = "https://github.com/whosneo/ebpf_monitor"
-    environment: str = "production"
-    debug: bool = False
+    
+    def __init__(self, name="ebpf_monitor", version="1.0.0", 
+                 description="eBPF Monitor for Linux", author="bwyu",
+                 email="bwyu@czce.com.cn", 
+                 url="https://github.com/whosneo/ebpf_monitor",
+                 environment="production", debug=False, **kwargs):
+        self.name = name
+        self.version = version
+        self.description = description
+        self.author = author
+        self.email = email
+        self.url = url
+        self.environment = environment
+        self.debug = debug
+        # 处理额外的关键字参数
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     @classmethod
-    def validate(cls, config: Dict[str, Any]) -> 'AppConfig':
+    def validate(cls, config):
+        # type: (Dict[str, Any]) -> 'AppConfig'
         """验证应用配置"""
         assert config is not None, "应用配置不能为空"
         assert isinstance(config, dict), "应用配置必须为字典"
@@ -53,29 +71,47 @@ class AppConfig(ValidatedConfig):
         try:
             app_config = cls(**config)
         except TypeError as e:
-            raise ValueError(f"应用配置中存在无效的配置项: {e}")
+            raise ValueError("应用配置中存在无效的配置项: {}".format(e))
 
         return app_config
 
 
-@dataclass
 class LogConfig(ValidatedConfig):
     """日志配置"""
-    version: int = 1
-    level: str = "INFO"
-    formatters: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
-        "detailed": {"format": "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s"},
-        "simple": {"format": "%(levelname)s: %(message)s"}
-    })
-    handlers: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
-        "console": {"class": "logging.StreamHandler", "formatter": "simple", "stream": "ext://sys.stdout"},
-        "file": {"class": "logging.handlers.TimedRotatingFileHandler", "formatter": "detailed",
-                 "filename": "monitor.log", "when": "D", "interval": 1, "backupCount": 365}
-    })
-    loggers: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    
+    def __init__(self, version=1, level="INFO", formatters=None, handlers=None, loggers=None, **kwargs):
+        self.version = version
+        self.level = level
+        
+        # 默认格式化器
+        if formatters is None:
+            formatters = {
+                "detailed": {"format": "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s"},
+                "simple": {"format": "%(levelname)s: %(message)s"}
+            }
+        self.formatters = formatters
+        
+        # 默认处理器
+        if handlers is None:
+            handlers = {
+                "console": {"class": "logging.StreamHandler", "formatter": "simple", "stream": "ext://sys.stdout"},
+                "file": {"class": "logging.handlers.TimedRotatingFileHandler", "formatter": "detailed",
+                         "filename": "monitor.log", "when": "D", "interval": 1, "backupCount": 365}
+            }
+        self.handlers = handlers
+        
+        # 默认日志记录器
+        if loggers is None:
+            loggers = {}
+        self.loggers = loggers
+        
+        # 处理额外的关键字参数
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     @classmethod
-    def validate(cls, config: Dict[str, Any]) -> 'LogConfig':
+    def validate(cls, config):
+        # type: (Dict[str, Any]) -> 'LogConfig'
         """验证日志配置"""
         assert config is not None, "日志配置不能为空"
         assert isinstance(config, dict), "日志配置必须为字典"
@@ -94,21 +130,27 @@ class LogConfig(ValidatedConfig):
         try:
             log_config = cls(**config)
         except TypeError as e:
-            raise ValueError(f"日志配置中存在无效的配置项: {e}")
+            raise ValueError("日志配置中存在无效的配置项: {}".format(e))
 
         return log_config
 
 
-@dataclass
 class OutputConfig(ValidatedConfig):
     """输出控制器配置"""
-    buffer_size: int = 2000
-    flush_interval: float = 2.0  # 秒
-    csv_delimiter: str = ","
-    include_header: bool = True
+    
+    def __init__(self, buffer_size=2000, flush_interval=2.0, csv_delimiter=",", include_header=True, **kwargs):
+        self.buffer_size = buffer_size
+        self.flush_interval = flush_interval  # 秒
+        self.csv_delimiter = csv_delimiter
+        self.include_header = include_header
+        
+        # 处理额外的关键字参数
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     @classmethod
-    def validate(cls, config: Dict[str, Any]) -> 'OutputConfig':
+    def validate(cls, config):
+        # type: (Dict[str, Any]) -> 'OutputConfig'
         """验证输出配置"""
         assert config is not None, "输出配置不能为空"
         assert isinstance(config, dict), "输出配置必须为字典"
@@ -126,7 +168,7 @@ class OutputConfig(ValidatedConfig):
         try:
             output_config = cls(**config)
         except TypeError as e:
-            raise ValueError(f"输出配置中存在无效的配置项: {e}")
+            raise ValueError("输出配置中存在无效的配置项: {}".format(e))
 
         return output_config
 
@@ -150,7 +192,7 @@ class MonitorsConfig(ValidatedConfig):
 
             # 如果用户提供了该监控器的配置，合并它
             user_config = kwargs.get(monitor_type, {})
-            final_config = {**default_config, **user_config}
+            final_config = dict(default_config, **user_config)
 
             # 动态设置属性
             setattr(self, monitor_type, final_config)
@@ -160,7 +202,8 @@ class MonitorsConfig(ValidatedConfig):
         self._unknown_configs = {k: v for k, v in kwargs.items() if k not in known_monitors}
 
     @classmethod
-    def _get_registered_monitors(cls) -> Dict[str, Type[BaseMonitor]]:
+    def _get_registered_monitors(cls):
+        # type: () -> Dict[str, Type[BaseMonitor]]
         """
         获取已注册的监控器
         
@@ -171,7 +214,8 @@ class MonitorsConfig(ValidatedConfig):
         return MONITOR_REGISTRY.copy()
 
     @classmethod
-    def validate(cls, config: Dict[str, Any]) -> 'MonitorsConfig':
+    def validate(cls, config):
+        # type: (Dict[str, Any]) -> 'MonitorsConfig'
         """验证监控配置 - 动态验证所有监控器"""
         assert config is not None, "监控配置不能为空"
         assert isinstance(config, dict), "监控配置必须为字典"
@@ -181,7 +225,7 @@ class MonitorsConfig(ValidatedConfig):
         try:
             monitors_config = cls(**config)
         except Exception as e:
-            raise ValueError(f"创建监控配置失败: {e}")
+            raise ValueError("创建监控配置失败: {}".format(e))
 
         # 第2步：验证每个监控器的配置
         discovered_monitors = cls._get_registered_monitors()
@@ -194,7 +238,6 @@ class MonitorsConfig(ValidatedConfig):
 
         # 第3步：对未知配置发出警告
         for unknown_name in monitors_config._unknown_configs:
-            raise ValueError(f"未知的监控器配置: {unknown_name}",
-                             "请检查监控器名称或确认监控器已正确注册")
+            raise ValueError("未知的监控器配置: {}, 请检查监控器名称或确认监控器已正确注册".format(unknown_name))
 
         return monitors_config

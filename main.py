@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 eBPF性能监控工具 - 主程序入口
@@ -18,8 +18,16 @@ import argparse
 import logging
 import sys
 import time
-from pathlib import Path
-from typing import List
+# 兼容性导入
+try:
+    from pathlib import Path
+except ImportError:
+    from src.utils.py2_compat import Path
+
+try:
+    from typing import List
+except ImportError:
+    from src.utils.py2_compat import List
 
 from src.utils.application_context import ApplicationContext
 
@@ -35,7 +43,7 @@ def get_version_info():
         config_manager = ConfigManager()
         app_config = config_manager.get_app_config()
         if hasattr(app_config, 'version') and app_config.version:
-            return f"eBPF监控工具 v{app_config.version}"
+            return "eBPF监控工具 v{}".format(app_config.version)
     except Exception:
         # 回退选项
         return "eBPF监控工具 v1.0.0"
@@ -69,7 +77,7 @@ def parse_arguments():
         "-m",
         "--monitors",
         type=str,
-        help="监控器列表，用逗号分隔 (例如: exec,tcp,udp,interrupt,io,memory,syscall)",
+        help="监控器列表，用逗号分隔 (例如: exec,func,syscall,open,io,interrupt,io,memory)",
     )
     parser.add_argument(
         "-p",
@@ -121,15 +129,15 @@ if __name__ == "__main__":
     expected_dir = Path(__file__).resolve().parent.name
 
     if current_dir != expected_dir:
-        print(f"错误: 必须从\"{expected_dir}\"目录运行此脚本", file=sys.stderr)
-        print(f"当前工作目录: {current_dir}", file=sys.stderr)
-        print(f"预期工作目录: {expected_dir}", file=sys.stderr)
+        sys.stderr.write("错误: 必须从\"{}\"目录运行此脚本\n".format(expected_dir))
+        sys.stderr.write("当前工作目录: {}\n".format(current_dir))
+        sys.stderr.write("预期工作目录: {}\n".format(expected_dir))
         sys.exit(1)
 
     # 检查必要目录
     for dir_name in REQUIRED_DIRS:
         if not Path(dir_name).exists():
-            print(f"缺少必要的目录: {dir_name}", file=sys.stderr)
+            sys.stderr.write("缺少必要的目录: {}\n".format(dir_name))
             sys.exit(1)
 
     # 解析命令行参数
@@ -144,7 +152,7 @@ if __name__ == "__main__":
     if args.daemon_status:
         if context.daemon_manager.is_running():
             pid = context.daemon_manager.get_daemon_pid()
-            print(f"守护进程正在运行，PID: {pid}")
+            print("守护进程正在运行，PID: {}".format(pid))
             sys.exit(0)
         else:
             print("守护进程未运行")
@@ -156,7 +164,7 @@ if __name__ == "__main__":
             print("守护进程停止成功")
             sys.exit(0)
         else:
-            print("守护进程停止失败", file=sys.stderr)
+            sys.stderr.write("守护进程停止失败\n")
             sys.exit(1)
 
     # 设置日志级别（如果 verbose）
@@ -167,7 +175,7 @@ if __name__ == "__main__":
 
     # 2.检查内核兼容性
     checker = context.get_capability_checker()
-    logger.info(f"系统信息: {checker.get_system_info()}")
+    logger.info("系统信息: {}".format(checker.get_system_info()))
     if not checker.validate_environment():
         logger.error("环境验证失败")
         sys.exit(1)
@@ -188,15 +196,15 @@ if __name__ == "__main__":
         is_daemon_child = True
         logger.info("守护进程化成功，继续初始化监控器...")
 
-    selected_monitors: List[str] = []
+    selected_monitors = []  # type: List[str]
     if args.monitors:
         selected_monitors = [m.strip() for m in args.monitors.split(",")]
         # 验证监控器名称
         available_monitors = monitor_registry.get_monitor_names()
         for monitor in selected_monitors:
             if monitor not in available_monitors:
-                logger.error(f"错误: 未知监控器 '{monitor}'")
-                logger.error(f"可用监控器: {', '.join(available_monitors)}")
+                logger.error("错误: 未知监控器 '{}'".format(monitor))
+                logger.error("可用监控器: {}".format(', '.join(available_monitors)))
                 sys.exit(1)
 
     # 4.解析并验证监控配置
@@ -238,15 +246,15 @@ if __name__ == "__main__":
             while ebpf_monitor.is_running():
                 time.sleep(1)
         except KeyboardInterrupt:
-            print()
+            print("")
             logger.info("收到用户中断信号，正在关闭监控工具...")
         except Exception as e:
-            logger.error(f"监控循环异常: {e}")
+            logger.error("监控循环异常: {}".format(e))
         finally:
             ebpf_monitor.stop()
 
     except Exception as e:
-        logger.error(f"eBPF监控工具运行失败: {e}")
+        logger.error("eBPF监控工具运行失败: {}".format(e))
         sys.exit(1)
     finally:
         # 只在非daemon模式或daemon子进程中执行cleanup

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 守护进程管理器
@@ -11,8 +11,16 @@ import os
 import signal
 import sys
 import threading
-from pathlib import Path
-from typing import Optional
+# 兼容性导入
+try:
+    from typing import Optional
+except ImportError:
+    from .py2_compat import Optional
+
+try:
+    from pathlib import Path
+except ImportError:
+    from .py2_compat import Path
 
 from .log_manager import LogManager
 
@@ -36,7 +44,8 @@ class DaemonManager:
                     cls._instance = super(DaemonManager, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, pid_file: str = "temp/monitor.pid"):
+    def __init__(self, pid_file="temp/monitor.pid"):
+        # type: (str) -> None
         """
         初始化守护进程管理器
         
@@ -48,7 +57,8 @@ class DaemonManager:
             self._setup_daemon_manager(pid_file)
             self._initialized = True
 
-    def _setup_daemon_manager(self, pid_file: str):
+    def _setup_daemon_manager(self, pid_file):
+        # type: (str) -> None
         """设置守护进程管理器"""
         self.log_manager = LogManager()
         self.logger = self.log_manager.get_logger(self)
@@ -63,7 +73,8 @@ class DaemonManager:
 
         self.logger.info("守护进程管理器初始化完成")
 
-    def daemonize(self) -> bool:
+    def daemonize(self):
+        # type: () -> bool
         """
         将当前进程守护化
         
@@ -76,7 +87,7 @@ class DaemonManager:
             # 检查是否已有守护进程在运行
             if self.is_running():
                 existing_pid = self.get_daemon_pid()
-                self.logger.error(f"守护进程已在运行，PID: {existing_pid}")
+                self.logger.error("守护进程已在运行，PID: {}".format(existing_pid))
                 return False
 
             self.logger.info("开始守护进程化...")
@@ -113,11 +124,11 @@ class DaemonManager:
             self._setup_signal_handlers()
 
             self.is_daemon = True
-            self.logger.info(f"守护进程启动成功，PID: {os.getpid()}")
+            self.logger.info("守护进程启动成功，PID: {}".format(os.getpid()))
             return True
 
         except OSError as e:
-            self.logger.error(f"守护进程化失败: {e}")
+            self.logger.error("守护进程化失败: {}".format(e))
             return False
 
     @staticmethod
@@ -135,7 +146,8 @@ class DaemonManager:
             os.dup2(null_out.fileno(), sys.stdout.fileno())
             os.dup2(null_out.fileno(), sys.stderr.fileno())
 
-    def is_running(self) -> bool:
+    def is_running(self):
+        # type: () -> bool
         """
         检查守护进程是否正在运行
         
@@ -155,7 +167,8 @@ class DaemonManager:
             self._remove_pid_file()
             return False
 
-    def get_daemon_pid(self) -> Optional[int]:
+    def get_daemon_pid(self):
+        # type: () -> Optional[int]
         """
         获取守护进程PID
         
@@ -166,13 +179,15 @@ class DaemonManager:
             if not self.pid_file.exists():
                 return None
 
-            with open(self.pid_file, 'r') as f:
+            with open(str(self.pid_file), 'r') as f:
                 pid_str = f.read().strip()
                 return int(pid_str) if pid_str else None
-        except (FileNotFoundError, ValueError, PermissionError):
+        except (IOError, OSError, ValueError):
+            # Python 2.7 compatibility - FileNotFoundError and PermissionError don't exist
             return None
 
-    def stop_daemon(self) -> bool:
+    def stop_daemon(self):
+        # type: () -> bool
         """
         停止守护进程
         
@@ -188,12 +203,15 @@ class DaemonManager:
             return True
 
         try:
-            self.logger.info(f"正在停止守护进程 PID: {pid}")
+            self.logger.info("正在停止守护进程 PID: {}".format(pid))
 
             # 启动日志监控线程
             import threading
             import time
-            from pathlib import Path
+            try:
+                from pathlib import Path
+            except ImportError:
+                from .py2_compat import Path
 
             log_file = self.log_manager.get_log_file_path()
             if log_file.exists():
@@ -203,13 +221,13 @@ class DaemonManager:
                 def monitor_log():
                     """监控日志文件，显示新增的日志内容"""
                     try:
-                        with open(log_file, 'r') as f:
+                        with open(str(log_file), 'r') as f:
                             f.seek(initial_size)  # 跳到文件末尾
                             no_data_count = 0
                             while True:
                                 line = f.readline()
                                 if line:
-                                    print(f"守护进程: {line.strip()}")
+                                    print("守护进程: {}".format(line.strip()))
                                     no_data_count = 0  # 重置计数器
                                 else:
                                     time.sleep(0.1)
@@ -244,7 +262,7 @@ class DaemonManager:
             return True
 
         except (OSError, ProcessLookupError) as e:
-            self.logger.error(f"停止守护进程失败: {e}")
+            self.logger.error("停止守护进程失败: {}".format(e))
             return False
 
     def _setup_signal_handlers(self):
@@ -268,7 +286,7 @@ class DaemonManager:
         # 守护进程无法直接输出到终端，通过日志文件记录停止过程
 
         signal_name = signal.Signals(signum).name
-        self.logger.info(f"收到信号 {signal_name} ({signum})，开始优雅关闭...")
+        self.logger.info("收到信号 {} ({})，开始优雅关闭...".format(signal_name, signum))
 
         try:
             # 停止eBPF监控器
@@ -283,10 +301,11 @@ class DaemonManager:
             sys.exit(0)
 
         except Exception as e:
-            self.logger.error(f"优雅关闭过程中发生错误: {e}")
+            self.logger.error("优雅关闭过程中发生错误: {}".format(e))
             sys.exit(1)
 
-    def _write_pid_file(self) -> bool:
+    def _write_pid_file(self):
+        # type: () -> bool
         """
         写入PID文件
         
@@ -294,7 +313,7 @@ class DaemonManager:
             bool: 写入是否成功
         """
         try:
-            with open(self.pid_file, 'w') as f:
+            with open(str(self.pid_file), 'w') as f:
                 # 获取文件锁
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 f.write(str(os.getpid()))
@@ -302,7 +321,7 @@ class DaemonManager:
                 os.fsync(f.fileno())
             return True
         except (IOError, OSError) as e:
-            self.logger.error(f"写入PID文件失败: {e}")
+            self.logger.error("写入PID文件失败: {}".format(e))
             return False
 
     def _remove_pid_file(self):
@@ -312,7 +331,7 @@ class DaemonManager:
                 self.pid_file.unlink()
                 self.logger.debug("PID文件已删除")
         except OSError as e:
-            self.logger.error(f"删除PID文件失败: {e}")
+            self.logger.error("删除PID文件失败: {}".format(e))
 
     def set_ebpf_monitor(self, ebpf_monitor):
         """
@@ -327,6 +346,6 @@ class DaemonManager:
 if __name__ == "__main__":
     # 测试函数
     daemon_manager = DaemonManager()
-    print(f"守护进程是否运行: {daemon_manager.is_running()}")
+    print("守护进程是否运行: {}".format(daemon_manager.is_running()))
     if daemon_manager.is_running():
-        print(f"守护进程PID: {daemon_manager.get_daemon_pid()}")
+        print("守护进程PID: {}".format(daemon_manager.get_daemon_pid()))

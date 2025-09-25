@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 配置管理器
@@ -9,9 +9,16 @@
 
 import sys
 import threading
-from dataclasses import asdict
-from pathlib import Path
-from typing import Dict
+# 兼容性导入
+try:
+    from typing import Dict
+except ImportError:
+    from .py2_compat import Dict
+
+try:
+    from pathlib import Path
+except ImportError:
+    from .py2_compat import Path
 
 import yaml
 
@@ -33,7 +40,8 @@ class ConfigManager:
                     cls._instance = super(ConfigManager, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, config_file: str = "config/monitor_config.yaml"):
+    def __init__(self, config_file="config/monitor_config.yaml"):
+        # type: (str) -> None
         """
         初始化配置管理器
 
@@ -46,7 +54,8 @@ class ConfigManager:
             self._setup_config_manager(config_file)
             self._initialized = True
 
-    def _setup_config_manager(self, config_file: str):
+    def _setup_config_manager(self, config_file):
+        # type: (str) -> None
         """
         初始化配置管理器，加载配置文件
 
@@ -78,31 +87,42 @@ class ConfigManager:
         self.config_data = self._get_default_config_data()
         try:
             if config_path.exists():
-                with open(config_path, "r", encoding="utf-8") as f:
+                with open(str(config_path), "r") as f:
                     config_data = yaml.safe_load(f)
                     if config_data:
                         self.config_data = config_data
                     else:
-                        print(f"配置文件为空，使用默认配置", file=sys.stdout)
+                        sys.stdout.write("配置文件为空，使用默认配置\n")
             else:
-                print(f"配置文件不存在，使用默认配置", file=sys.stdout)
-        except PermissionError:
-            print(f"配置文件权限错误: {config_path}", file=sys.stderr)
+                sys.stdout.write("配置文件不存在，使用默认配置\n")
+        except (OSError, IOError) as e:
+            # Python 2.7 compatibility - PermissionError doesn't exist
+            if hasattr(e, 'errno') and e.errno == 13:  # Permission denied
+                sys.stderr.write("配置文件权限错误: {}\n".format(config_path))
             raise
         except yaml.YAMLError as e:
-            print(f"配置文件格式错误: {e}", file=sys.stderr)
+            sys.stderr.write("配置文件格式错误: {}\n".format(e))
             raise
         except Exception as e:
-            print(f"加载配置文件失败: {e}", file=sys.stderr)
-            print(f"加载配置文件失败，使用默认配置", file=sys.stdout)
+            sys.stderr.write("加载配置文件失败: {}\n".format(e))
+            sys.stdout.write("加载配置文件失败，使用默认配置\n")
 
     @staticmethod
-    def _get_default_config_data() -> Dict[str, Dict]:
+    def _get_default_config_data():
+        # type: () -> Dict[str, Dict]
         """加载默认配置"""
+        def _obj_to_dict(obj):
+            """将对象转换为字典"""
+            result = {}
+            for key, value in obj.__dict__.items():
+                if not key.startswith('_'):
+                    result[key] = value
+            return result
+            
         return {
-            "app": asdict(AppConfig()),
-            "logging": asdict(LogConfig()),
-            "output": asdict(OutputConfig()),
+            "app": _obj_to_dict(AppConfig()),
+            "logging": _obj_to_dict(LogConfig()),
+            "output": _obj_to_dict(OutputConfig()),
             "monitors": {}  # 延迟初始化监控配置
         }
 
@@ -130,23 +150,28 @@ class ConfigManager:
         monitors_config = self.config_data.get("monitors", {})
         self.monitors_config = MonitorsConfig.validate(monitors_config)
 
-    def get_base_dir(self) -> Path:
+    def get_base_dir(self):
+        # type: () -> Path
         """获取工具根目录"""
         return self.base_dir
 
-    def get_monitors_dir(self) -> Path:
+    def get_monitors_dir(self):
+        # type: () -> Path
         """获取监控器目录"""
         return self.base_dir / "src" / "monitors"
 
-    def get_ebpf_dir(self) -> Path:
+    def get_ebpf_dir(self):
+        # type: () -> Path
         """获取eBPF目录"""
         return self.base_dir / "src" / "ebpf"
 
-    def get_app_name(self) -> str:
+    def get_app_name(self):
+        # type: () -> str
         """获取应用名称"""
         return self.app_config.name
 
-    def get_config(self) -> Dict[str, ValidatedConfig]:
+    def get_config(self):
+        # type: () -> Dict[str, ValidatedConfig]
         """
         获取完整配置
 
@@ -160,19 +185,23 @@ class ConfigManager:
             "monitors": self.monitors_config
         }
 
-    def get_app_config(self) -> AppConfig:
+    def get_app_config(self):
+        # type: () -> AppConfig
         """获取应用配置"""
         return self.app_config
 
-    def get_log_config(self) -> LogConfig:
+    def get_log_config(self):
+        # type: () -> LogConfig
         """获取日志配置"""
         return self.log_config
 
-    def get_output_config(self) -> OutputConfig:
+    def get_output_config(self):
+        # type: () -> OutputConfig
         """获取输出配置"""
         return self.output_config
 
-    def get_monitors_config(self) -> MonitorsConfig:
+    def get_monitors_config(self):
+        # type: () -> MonitorsConfig
         """获取监控配置"""
         return self.monitors_config
 
@@ -190,8 +219,8 @@ if __name__ == "__main__":
     logger.info("=== 配置管理器测试 ===")
 
     # 显示配置
-    logger.info(f"配置文件: {config_manager.config_file}")
-    logger.info(f"应用配置: {config_manager.get_app_config()}")
-    logger.info(f"日志配置: {config_manager.get_log_config()}")
-    logger.info(f"输出配置: {config_manager.get_output_config()}")
-    logger.info(f"监控配置: {config_manager.get_monitors_config()}")
+    logger.info("配置文件: {}".format(config_manager.config_file))
+    logger.info("应用配置: {}".format(config_manager.get_app_config()))
+    logger.info("日志配置: {}".format(config_manager.get_log_config()))
+    logger.info("输出配置: {}".format(config_manager.get_output_config()))
+    logger.info("监控配置: {}".format(config_manager.get_monitors_config()))

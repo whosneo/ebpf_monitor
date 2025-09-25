@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 系统调用监控器
@@ -9,10 +9,23 @@
 
 import ctypes as ct
 import errno
-from enum import Enum
-from typing import Dict, List, Any
+try:
+    from enum import Enum
+except ImportError:
+    # Python 2.7 fallback
+    from ..utils.py2_compat import Enum
+# 兼容性导入
+try:
+    from typing import Dict, List, Any
+except ImportError:
+    from ..utils.py2_compat import Dict, List, Any
 
-from bpfcc import syscall  # pyright: ignore[reportMissingImports]
+try:
+    # noinspection PyUnresolvedReferences
+    from bpfcc import syscall  # pyright: ignore[reportMissingImports]
+except ImportError:
+    # Python 2.7 fallback
+    from bcc import syscall  # pyright: ignore[reportMissingImports]
 
 from .base import BaseEvent, BaseMonitor
 from ..utils.data_processor import DataProcessor
@@ -43,66 +56,78 @@ class SyscallEvent(BaseEvent):
     ]
 
     @property
-    def duration_us(self) -> float:
+    def duration_us(self):
+        # type: () -> float
         """获取系统调用持续时间（微秒）"""
         return self.duration_ns / 1000.0
 
     @property
-    def duration_ms(self) -> float:
+    def duration_ms(self):
+        # type: () -> float
         """获取系统调用持续时间（毫秒）"""
         return self.duration_ns / 1000000.0
 
     @property
-    def category(self) -> SyscallCategory:
+    def category(self):
+        # type: () -> SyscallCategory
         """获取系统调用分类"""
         return SyscallMonitor.classify_syscall(self.syscall_nr)
 
     @property
-    def is_error(self) -> bool:
+    def is_error(self):
+        # type: () -> bool
         """检查是否为错误返回"""
         return self.ret_val < 0
 
     @property
-    def error_name(self) -> str:
+    def error_name(self):
+        # type: () -> str
         """获取错误名称"""
         if not self.is_error:
             return "SUCCESS"
         error_code = -self.ret_val
-        return errno.errorcode.get(error_code, f"ERRNO_{error_code}")
+        return errno.errorcode.get(error_code, "ERRNO_{}".format(error_code))
 
     @property
-    def is_slow_call(self) -> bool:
+    def is_slow_call(self):
+        # type: () -> bool
         """是否为慢调用（基于分类的动态阈值）"""
         # 这个方法需要访问Monitor的配置，在format方法中会处理
         return False
 
     @property
-    def is_io_call(self) -> bool:
+    def is_io_call(self):
+        # type: () -> bool
         """是否为IO调用"""
         return self.category == SyscallCategory.FILE_IO
 
     @property
-    def is_network_call(self) -> bool:
+    def is_network_call(self):
+        # type: () -> bool
         """是否为网络调用"""
         return self.category == SyscallCategory.NETWORK
 
     @property
-    def is_memory_call(self) -> bool:
+    def is_memory_call(self):
+        # type: () -> bool
         """是否为内存调用"""
         return self.category == SyscallCategory.MEMORY
 
     @property
-    def is_process_call(self) -> bool:
+    def is_process_call(self):
+        # type: () -> bool
         """是否为进程调用"""
         return self.category == SyscallCategory.PROCESS
 
     @property
-    def is_signal_call(self) -> bool:
+    def is_signal_call(self):
+        # type: () -> bool
         """是否为信号调用"""
         return self.category == SyscallCategory.SIGNAL
 
     @property
-    def is_time_call(self) -> bool:
+    def is_time_call(self):
+        # type: () -> bool
         """是否为时间调用"""
         return self.category == SyscallCategory.TIME
 
@@ -110,9 +135,9 @@ class SyscallEvent(BaseEvent):
 @register_monitor("syscall")
 class SyscallMonitor(BaseMonitor):
     """系统调用监控器"""
-    EVENT_TYPE: type = SyscallEvent
+    EVENT_TYPE = SyscallEvent  # type: type
 
-    REQUIRED_TRACEPOINTS: List[str] = [
+    REQUIRED_TRACEPOINTS = [  # type: List[str]
         'raw_syscalls:sys_enter',
         'raw_syscalls:sys_exit'
     ]
@@ -144,7 +169,8 @@ class SyscallMonitor(BaseMonitor):
     }
 
     @classmethod
-    def classify_syscall(cls, syscall_nr: int) -> SyscallCategory:
+    def classify_syscall(cls, syscall_nr):
+        # type: (int) -> SyscallCategory
         """对系统调用进行分类"""
         for category, syscalls in cls.SYSCALL_CATEGORIES.items():
             if syscall_nr in syscalls:
@@ -152,7 +178,8 @@ class SyscallMonitor(BaseMonitor):
         return SyscallCategory.UNKNOWN
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls):
+        # type: () -> Dict[str, Any]
         """获取系统调用监控器默认配置"""
         return {
             "enabled": True,
@@ -178,7 +205,8 @@ class SyscallMonitor(BaseMonitor):
         }
 
     @classmethod
-    def validate_monitor_config(cls, config: Dict[str, Any]):
+    def validate_monitor_config(cls, config):
+        # type: (Dict[str, Any]) -> None
         """验证系统调用监控器配置"""
         assert config.get("sampling_strategy") is not None, "sampling_strategy不能为空"
         assert config.get("sampling_strategy") in ["intelligent", "uniform", "disabled"], "sampling_strategy必须为intelligent/uniform/disabled"
@@ -191,17 +219,17 @@ class SyscallMonitor(BaseMonitor):
         
         monitor_categories = config.get("monitor_categories")
         for category in ["file_io", "network", "memory", "process", "signal", "time"]:
-            assert category in monitor_categories, f"monitor_categories必须包含{category}"
-            assert isinstance(monitor_categories[category], bool), f"monitor_categories.{category}必须为布尔值"
+            assert category in monitor_categories, "monitor_categories必须包含{}".format(category)
+            assert isinstance(monitor_categories[category], bool), "monitor_categories.{}必须为布尔值".format(category)
         
         assert config.get("performance_thresholds") is not None, "performance_thresholds不能为空"
         assert isinstance(config.get("performance_thresholds"), dict), "performance_thresholds必须为字典"
         
         thresholds = config.get("performance_thresholds")
         for threshold in ["file_io_ms", "network_ms", "memory_ms", "process_ms", "default_us"]:
-            assert threshold in thresholds, f"performance_thresholds必须包含{threshold}"
-            assert isinstance(thresholds[threshold], (int, float)), f"performance_thresholds.{threshold}必须为数字"
-            assert thresholds[threshold] >= 0, f"performance_thresholds.{threshold}必须大于等于0"
+            assert threshold in thresholds, "performance_thresholds必须包含{}".format(threshold)
+            assert isinstance(thresholds[threshold], (int, float)), "performance_thresholds.{}必须为数字".format(threshold)
+            assert thresholds[threshold] >= 0, "performance_thresholds.{}必须大于等于0".format(threshold)
         
         assert config.get("max_events_per_second") is not None, "max_events_per_second不能为空"
         assert isinstance(config.get("max_events_per_second"), int), "max_events_per_second必须为整数"
@@ -210,7 +238,8 @@ class SyscallMonitor(BaseMonitor):
         assert config.get("show_errors_only") is not None, "show_errors_only不能为空"
         assert isinstance(config.get("show_errors_only"), bool), "show_errors_only必须为布尔值"
 
-    def _initialize(self, config: Dict[str, Any]):
+    def _initialize(self, config):
+        # type: (Dict[str, Any]) -> None
         """初始化系统调用监控器"""
         self.enabled = config.get("enabled")
         
@@ -230,7 +259,8 @@ class SyscallMonitor(BaseMonitor):
         # 过滤配置
         self.show_errors_only = config.get("show_errors_only")
 
-    def _should_handle_event(self, event: SyscallEvent) -> bool:
+    def _should_handle_event(self, event):
+        # type: (SyscallEvent) -> bool
         """检查是否应该处理事件"""
         # 错误过滤
         if self.show_errors_only and not event.is_error:
@@ -253,7 +283,8 @@ class SyscallMonitor(BaseMonitor):
         
         return True
 
-    def _is_slow_call(self, event: SyscallEvent) -> bool:
+    def _is_slow_call(self, event):
+        # type: (SyscallEvent) -> bool
         """判断是否为慢调用"""
         category = event.category
         if category == SyscallCategory.FILE_IO:
@@ -269,7 +300,8 @@ class SyscallMonitor(BaseMonitor):
 
     # ==================== 格式化方法实现 ====================
 
-    def get_csv_header(self) -> List[str]:
+    def get_csv_header(self):
+        # type: () -> List[str]
         """获取CSV头部字段"""
         return [
             'timestamp', 'time_str', 'monitor_type', 'pid', 'tid', 'cpu', 'comm',
@@ -277,7 +309,8 @@ class SyscallMonitor(BaseMonitor):
             'duration_ns', 'duration_us', 'duration_ms', 'is_error', 'is_slow_call'
         ]
 
-    def format_for_csv(self, event_data: SyscallEvent) -> Dict[str, Any]:
+    def format_for_csv(self, event_data):
+        # type: (SyscallEvent) -> Dict[str, Any]
         """将事件数据格式化为CSV行数据"""
         timestamp = self._convert_timestamp(event_data)
         time_str = DataProcessor.format_timestamp(timestamp)
@@ -298,14 +331,17 @@ class SyscallMonitor(BaseMonitor):
         
         return dict(zip(self.get_csv_header(), values))
 
-    def get_console_header(self) -> str:
+    def get_console_header(self):
+        # type: () -> str
         """获取控制台输出的表头"""
-        return f"{'TIME':<22} {'PID':<8} {'TID':<8} {'CPU':<3} {'COMM':<16} {'SYSCALL':<12} {'CATEGORY':<8} {'DURATION':<10} {'RET':<6} {'STATUS'}"
+        return "{:<22} {:<8} {:<8} {:<3} {:<16} {:<12} {:<8} {:<10} {:<6} {}".format(
+            'TIME', 'PID', 'TID', 'CPU', 'COMM', 'SYSCALL', 'CATEGORY', 'DURATION', 'RET', 'STATUS')
 
-    def format_for_console(self, event_data: SyscallEvent) -> str:
+    def format_for_console(self, event_data):
+        # type: (SyscallEvent) -> str
         """将事件数据格式化为控制台输出"""
         timestamp = self._convert_timestamp(event_data)
-        time_str = f"[{DataProcessor.format_timestamp(timestamp)}]"
+        time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
 
         # 处理字节字符串
         comm = DataProcessor.decode_bytes(event_data.comm)
@@ -313,9 +349,9 @@ class SyscallMonitor(BaseMonitor):
 
         # 格式化持续时间
         if event_data.duration_ms >= 1.0:
-            duration_str = f"{event_data.duration_ms:.2f}ms"
+            duration_str = "{:.2f}ms".format(event_data.duration_ms)
         else:
-            duration_str = f"{event_data.duration_us:.2f}μs"
+            duration_str = "{:.2f}μs".format(event_data.duration_us)
 
         # 状态标记
         status_marks = []
@@ -326,7 +362,9 @@ class SyscallMonitor(BaseMonitor):
         
         status_str = "".join(status_marks) if status_marks else "OK"
 
-        return f"{time_str:<22} {event_data.pid:<8} {event_data.tid:<8} {event_data.cpu:<3} {comm:<16} {syscall_name:<12} {event_data.category.value:<8} {duration_str:<10} {event_data.ret_val:<6} {status_str}"
+        return "{:<22} {:<8} {:<8} {:<3} {:<16} {:<12} {:<8} {:<10} {:<6} {}".format(
+            time_str, event_data.pid, event_data.tid, event_data.cpu, comm, syscall_name, 
+            event_data.category.value, duration_str, event_data.ret_val, status_str)
 
 
 if __name__ == '__main__':
@@ -362,7 +400,7 @@ if __name__ == '__main__':
         while monitor.is_running():
             time.sleep(1)
     except KeyboardInterrupt:
-        print()
+        print("")
         logger.info("用户中断，正在停止监控...")
     finally:
         monitor.stop()

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 进程执行监控器
@@ -7,7 +7,13 @@
 """
 
 import ctypes as ct
-from typing import Dict, List, Any
+try:
+    from typing import Dict, List, Any
+except ImportError:
+    # Python 2.7 fallback
+    Dict = dict
+    List = list
+    Any = object
 
 from .base import BaseEvent, BaseMonitor
 from ..utils.data_processor import DataProcessor
@@ -29,20 +35,33 @@ class ExecEvent(BaseEvent):
 @register_monitor("exec")
 class ExecMonitor(BaseMonitor):
     """进程执行监控器"""
-    EVENT_TYPE: type = ExecEvent
+    EVENT_TYPE = ExecEvent  # type: type
 
-    REQUIRED_TRACEPOINTS: List[str] = [
-        "syscalls:sys_enter_execve",
-        "syscalls:sys_exit_execve"
-    ]
+    # 由于RHEL 7不支持syscalls:sys_enter/exit_execve tracepoint
+    # 改用kprobe方式，不需要检查tracepoint
+    REQUIRED_TRACEPOINTS = []  # type: List[str]
+
+    def _configure_ebpf_program(self):
+        # type: () -> None
+        """为旧内核附加kprobe"""
+        try:
+            # 附加kprobe到sys_execve
+            self.bpf.attach_kprobe(event="sys_execve", fn_name="trace_execve_entry")
+            self.bpf.attach_kretprobe(event="sys_execve", fn_name="trace_execve_return")
+            self.logger.info("成功附加kprobe到sys_execve")
+        except Exception as e:
+            self.logger.error("附加kprobe失败: {}".format(e))
+            raise
 
     # ==================== 格式化方法实现 ====================
 
-    def get_csv_header(self) -> List[str]:
+    def get_csv_header(self):
+        # type: () -> List[str]
         """获取CSV头部字段"""
         return ['timestamp', 'time_str', 'comm', 'uid', 'pid', 'ppid', 'ret', 'argv']
 
-    def format_for_csv(self, event_data: ExecEvent) -> Dict[str, Any]:
+    def format_for_csv(self, event_data):
+        # type: (ExecEvent) -> Dict[str, Any]
         """将事件数据格式化为CSV行数据"""
         timestamp = self._convert_timestamp(event_data)
         time_str = DataProcessor.format_timestamp(timestamp)
@@ -55,21 +74,23 @@ class ExecMonitor(BaseMonitor):
 
         return dict(zip(self.get_csv_header(), values))
 
-    def get_console_header(self) -> str:
+    def get_console_header(self):
+        # type: () -> str
         """获取控制台输出的表头"""
-        return f"{'TIME':<22} {'COMM':<16} {'UID':<6} {'PID':<8} {'PPID':<8} {'RET':<4} {'ARGS'}"
+        return "{:<22} {:<16} {:<6} {:<8} {:<8} {:<4} {}".format('TIME', 'COMM', 'UID', 'PID', 'PPID', 'RET', 'ARGS')
 
-    def format_for_console(self, event_data: ExecEvent) -> str:
+    def format_for_console(self, event_data):
+        # type: (ExecEvent) -> str
         """将事件数据格式化为控制台输出"""
         timestamp = self._convert_timestamp(event_data)
-        time_str = f"[{DataProcessor.format_timestamp(timestamp)}]"
+        time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
 
         # 处理字节字符串
         comm = DataProcessor.decode_bytes(event_data.comm)
         argv = DataProcessor.decode_bytes(event_data.argv)
 
         # 格式化输出
-        return f"{time_str:<22} {comm:<16} {event_data.uid:<6} {event_data.pid:<8} {event_data.ppid:<8} {event_data.ret:<4} {argv}"
+        return "{:<22} {:<16} {:<6} {:<8} {:<8} {:<4} {}".format(time_str, comm, event_data.uid, event_data.pid, event_data.ppid, event_data.ret, argv)
 
 
 if __name__ == "__main__":
@@ -106,7 +127,7 @@ if __name__ == "__main__":
         while monitor.is_running():
             time.sleep(1)
     except KeyboardInterrupt:
-        print()
+        print("")
         logger.info("用户中断，正在停止监控...")
     finally:
         monitor.stop()
