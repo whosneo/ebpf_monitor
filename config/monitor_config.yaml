@@ -87,17 +87,3 @@ monitors:
     network_calls: true      # 网络相关系统调用
     memory_calls: true       # 内存相关系统调用
     call_latency: true       # 调用延迟
-
-  # TCP监控
-  tcp:
-    enabled: true
-    target_ports: [80, 443, 22]
-    events: ["connect", "accept"]
-    show_failed: true
-
-  # UDP监控
-  udp:
-    enabled: true
-    target_ports: [53, 80, 443]
-    events: ["send", "recv"]
-    min_size: 0

@@ -4,6 +4,7 @@
 COPYFILE_DISABLE=1 tar -zcf ~/Downloads/ebpf-monitor-$(date +%Y%m%d).tar.gz \
   --exclude='package.sh' \
   --exclude='tests' \
+  --exclude='.pki' \
   --exclude='.venv' \
   --exclude='.tasks' \
   --exclude='*.backup' \
