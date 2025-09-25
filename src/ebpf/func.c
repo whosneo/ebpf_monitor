@@ -44,8 +44,15 @@ static inline bool is_target_user(u32 uid) {
 /* 公共：获取 ppid */
 static inline void get_ppid(u32 *ppid) {
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    if (task && task->real_parent) {
-        bpf_probe_read_kernel(ppid, sizeof(u32), &task->real_parent->tgid);
+    if (task) {
+        // RHEL 7兼容：使用bpf_probe_read替代bpf_probe_read_kernel
+        // 分两步读取以满足eBPF验证器要求
+        struct task_struct *parent = NULL;
+        if (bpf_probe_read(&parent, sizeof(parent), &task->real_parent) == 0 && parent) {
+            bpf_probe_read(ppid, sizeof(u32), &parent->tgid);
+        } else {
+            *ppid = 0;
+        }
     } else {
         *ppid = 0;
     }

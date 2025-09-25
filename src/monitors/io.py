@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 IO监控器
@@ -9,7 +9,11 @@ IO监控器
 
 import ctypes as ct
 import time
-from typing import Dict, List, Any
+# 兼容性导入
+try:
+    from typing import Dict, List, Any
+except ImportError:
+    from ..utils.py2_compat import Dict, List, Any
 
 from .base import BaseEvent, BaseMonitor
 from ..utils.data_processor import DataProcessor
@@ -32,17 +36,20 @@ class IOEvent(BaseEvent):
     ]
 
     @property
-    def duration_us(self) -> float:
+    def duration_us(self):
+        # type: () -> float
         """获取IO持续时间（微秒）"""
         return self.duration_ns / 1000.0
 
     @property
-    def duration_ms(self) -> float:
+    def duration_ms(self):
+        # type: () -> float
         """获取IO持续时间（毫秒）"""
         return self.duration_ns / 1000000.0
 
     @property
-    def type_str(self) -> str:
+    def type_str(self):
+        # type: () -> str
         """获取IO类型字符串"""
         if self.io_type == IOMonitor.IO_TYPE_READ:
             return "READ"
@@ -52,14 +59,16 @@ class IOEvent(BaseEvent):
             return "UNKNOWN"
 
     @property
-    def throughput_mbps(self) -> float:
+    def throughput_mbps(self):
+        # type: () -> float
         """获取IO吞吐量（MB/s）"""
         if self.duration_ns == 0:
             return 0.0
         return (self.size / (1024 * 1024)) / (self.duration_ns / 1e9)
 
     @property
-    def is_error(self) -> bool:
+    def is_error(self):
+        # type: () -> bool
         """检查是否为错误IO"""
         return self.ret_val < 0
 
@@ -80,7 +89,8 @@ class IOMonitor(BaseMonitor):
     IO_TYPE_WRITE = 2
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls):
+        # type: () -> Dict[str, Any]
         """获取默认配置"""
         return {
             "enabled": True,
@@ -89,7 +99,8 @@ class IOMonitor(BaseMonitor):
         }
 
     @classmethod
-    def validate_monitor_config(cls, config: Dict[str, Any]):
+    def validate_monitor_config(cls, config):
+        # type: (Dict[str, Any]) -> None
         """验证IO监控器配置"""
         assert config.get("slow_io_threshold_us") is not None, "slow_io_threshold_us不能为空"
         assert isinstance(config.get("slow_io_threshold_us"), int), "slow_io_threshold_us必须为整数"
@@ -101,13 +112,15 @@ class IOMonitor(BaseMonitor):
         assert config.get("large_io_threshold_kb") >= 0, "large_io_threshold_kb必须大于等于0"
         assert config.get("large_io_threshold_kb") <= 1024, "large_io_threshold_kb必须小于等于1024"
 
-    def _initialize(self, config: Dict[str, Any]) -> None:
+    def _initialize(self, config):
+        # type: (Dict[str, Any]) -> None
         """初始化IO监控器"""
         # IO性能阈值
         self.slow_io_threshold_us = config.get("slow_io_threshold_us")  # 慢IO阈值（微秒）
         self.large_io_threshold_kb = config.get("large_io_threshold_kb")  # 大IO阈值（KB）
 
-    def _should_handle_event(self, event: IOEvent) -> bool:
+    def _should_handle_event(self, event):
+        # type: (IOEvent) -> bool
         """检查是否应该处理事件"""
         if event.duration_us > self.slow_io_threshold_us:
             return True
@@ -117,11 +130,13 @@ class IOMonitor(BaseMonitor):
 
     # ==================== 格式化方法实现 ====================
 
-    def get_csv_header(self) -> List[str]:
+    def get_csv_header(self):
+        # type: () -> List[str]
         """获取CSV头部字段"""
         return ['timestamp', 'time_str', 'io_type', 'type_str', 'fd', 'size', 'duration_ns', 'duration_us', 'throughput_mbps', 'pid', 'tid', 'cpu', 'comm', 'ret_val', 'is_error']
 
-    def format_for_csv(self, event_data: IOEvent) -> Dict[str, Any]:
+    def format_for_csv(self, event_data):
+        # type: (IOEvent) -> Dict[str, Any]
         """将事件数据格式化为CSV行数据"""
         timestamp = self._convert_timestamp(event_data)
         time_str = DataProcessor.format_timestamp(timestamp)
@@ -133,43 +148,49 @@ class IOMonitor(BaseMonitor):
         
         return dict(zip(self.get_csv_header(), values))
 
-    def get_console_header(self) -> str:
+    def get_console_header(self):
+        # type: () -> str
         """获取控制台输出的表头"""
-        return f"{'TIME':<22} {'IO_TYPE':<8} {'FD':<4} {'SIZE':<8} {'DURATION':<10} {'THROUGHPUT':<12} {'PID':<8} {'TID':<8} {'CPU':<3} {'COMM':<16} {'RET':<6}"
+        return "{:<22} {:<8} {:<4} {:<8} {:<10} {:<12} {:<8} {:<8} {:<3} {:<16} {:<6}".format(
+            'TIME', 'IO_TYPE', 'FD', 'SIZE', 'DURATION', 'THROUGHPUT', 'PID', 'TID', 'CPU', 'COMM', 'RET')
 
-    def format_for_console(self, event_data: IOEvent) -> str:
+    def format_for_console(self, event_data):
+        # type: (IOEvent) -> str
         """将事件数据格式化为控制台输出"""
         timestamp = self._convert_timestamp(event_data)
-        time_str = f"[{DataProcessor.format_timestamp(timestamp)}]"
+        time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
 
         # 处理字节字符串
         comm = DataProcessor.decode_bytes(event_data.comm)
 
         # 格式化大小显示
         if event_data.size >= 1024 * 1024:
-            size_str = f"{event_data.size / (1024 * 1024):.1f}MB"
+            size_str = "{:.1f}MB".format(event_data.size / (1024 * 1024))
         elif event_data.size >= 1024:
-            size_str = f"{event_data.size / 1024:.1f}KB"
+            size_str = "{:.1f}KB".format(event_data.size / 1024)
         else:
-            size_str = f"{event_data.size}B"
+            size_str = "{}B".format(event_data.size)
 
-        duration_str = f"{event_data.duration_us:.2f}μs"
+        duration_str = "{:.2f}μs".format(event_data.duration_us)
 
         # 格式化吞吐量显示
         throughput = event_data.throughput_mbps
         if throughput >= 1000:
-            throughput_str = f"{throughput/1000:.1f}GB/s"
+            throughput_str = "{:.1f}GB/s".format(throughput/1000)
         elif throughput >= 1:
-            throughput_str = f"{throughput:.1f}MB/s"
+            throughput_str = "{:.1f}MB/s".format(throughput)
         elif throughput >= 0.001:
-            throughput_str = f"{throughput*1000:.1f}KB/s"
+            throughput_str = "{:.1f}KB/s".format(throughput*1000)
         else:
-            throughput_str = f"{throughput*1000000:.0f}B/s"
+            throughput_str = "{:.0f}B/s".format(throughput*1000000)
 
         # 错误标记
         error_mark = "❌" if event_data.is_error else ""
 
-        return f"{time_str:<22} {event_data.type_str:<8} {event_data.fd:<4} {size_str:<8} {duration_str:<10} {throughput_str:<12} {event_data.pid:<8} {event_data.tid:<8} {event_data.cpu:<3} {comm:<16} {event_data.ret_val:<6}{error_mark}"
+        return "{:<22} {:<8} {:<4} {:<8} {:<10} {:<12} {:<8} {:<8} {:<3} {:<16} {:<6}{}".format(
+            time_str, event_data.type_str, event_data.fd, size_str, duration_str, 
+            throughput_str, event_data.pid, event_data.tid, event_data.cpu, comm, 
+            event_data.ret_val, error_mark)
 
 
 if __name__ == '__main__':
@@ -205,7 +226,7 @@ if __name__ == '__main__':
         while monitor.is_running():
             time.sleep(1)
     except KeyboardInterrupt:
-        print()
+        print("")
         logger.info("用户中断，正在停止监控...")
     finally:
         monitor.stop()

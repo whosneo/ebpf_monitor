@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 文件操作监控器
@@ -7,7 +7,11 @@
 """
 
 import ctypes as ct
-from typing import Dict, List, Any
+# 兼容性导入
+try:
+    from typing import Dict, List, Any
+except ImportError:
+    from ..utils.py2_compat import Dict, List, Any
 
 from .base import BaseMonitor, BaseEvent
 from ..utils.data_processor import DataProcessor
@@ -30,7 +34,8 @@ class OpenEvent(BaseEvent):
     ]
 
     @property
-    def type_str(self) -> str:
+    def type_str(self):
+        # type: () -> str
         """获取IO类型字符串"""
         if self.type == OpenMonitor.EVENT_OPEN:
             return "OPEN"
@@ -57,7 +62,8 @@ class OpenMonitor(BaseMonitor):
     ]
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls):
+        # type: () -> Dict[str, Any]
         """获取默认配置"""
         return {
             "enabled": True,
@@ -65,17 +71,20 @@ class OpenMonitor(BaseMonitor):
         }
 
     @classmethod
-    def validate_monitor_config(cls, config: Dict[str, Any]):
+    def validate_monitor_config(cls, config):
+        # type: (Dict[str, Any]) -> None
         """验证文件操作监控器配置"""
         assert config.get("show_failed") is not None, "show_failed不能为空"
         assert isinstance(config.get("show_failed"), bool), "show_failed必须为布尔值"
 
-    def _initialize(self, config: Dict[str, Any]):
+    def _initialize(self, config):
+        # type: (Dict[str, Any]) -> None
         """初始化文件操作监控器"""
         self.enabled = config.get("enabled")
         self.show_failed = config.get("show_failed")  # 是否显示失败的操作
 
-    def _should_handle_event(self, event: OpenEvent) -> bool:
+    def _should_handle_event(self, event):
+        # type: (OpenEvent) -> bool
         """
         判断是否应该处理事件
         """
@@ -85,11 +94,13 @@ class OpenMonitor(BaseMonitor):
 
     # ==================== 格式化方法实现 ====================
 
-    def get_csv_header(self) -> List[str]:
+    def get_csv_header(self):
+        # type: () -> List[str]
         """获取CSV头部字段"""
         return ['timestamp', 'time_str', 'type', 'type_str', 'pid', 'tid', 'uid', 'cpu', 'comm', 'flags', 'mode', 'ret', 'filename']
 
-    def format_for_csv(self, event_data: OpenEvent) -> Dict[str, Any]:
+    def format_for_csv(self, event_data):
+        # type: (OpenEvent) -> Dict[str, Any]
         """将事件数据格式化为CSV行数据"""
         timestamp = self._convert_timestamp(event_data)
         time_str = DataProcessor.format_timestamp(timestamp)
@@ -102,14 +113,17 @@ class OpenMonitor(BaseMonitor):
 
         return dict(zip(self.get_csv_header(), values))
 
-    def get_console_header(self) -> str:
+    def get_console_header(self):
+        # type: () -> str
         """获取控制台输出的表头"""
-        return f"{'TIME':<22} {'TYPE':<6} {'PID':<8} {'TID':<8} {'UID':<6} {'CPU':<3} {'COMM':<16} {'FLAGS':<12} {'MODE':<6} {'RET':<4} {'FILENAME'}"
+        return "{:<22} {:<6} {:<8} {:<8} {:<6} {:<3} {:<16} {:<12} {:<6} {:<4} {}".format(
+            'TIME', 'TYPE', 'PID', 'TID', 'UID', 'CPU', 'COMM', 'FLAGS', 'MODE', 'RET', 'FILENAME')
 
-    def format_for_console(self, event_data: OpenEvent) -> str:
+    def format_for_console(self, event_data):
+        # type: (OpenEvent) -> str
         """将事件数据格式化为控制台输出"""
         timestamp = self._convert_timestamp(event_data)
-        time_str = f"[{DataProcessor.format_timestamp(timestamp)}]"
+        time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
 
         # 处理字节字符串
         comm = DataProcessor.decode_bytes(event_data.comm)
@@ -122,9 +136,12 @@ class OpenMonitor(BaseMonitor):
         error_mark = "❌" if event_data.ret < 0 else ""
 
         # 格式化输出
-        return f"{time_str:<22} {event_data.type_str:<6} {event_data.pid:<8} {event_data.tid:<8} {event_data.uid:<6} {event_data.cpu:<3} {comm:<16} {flag_names:<12} {event_data.mode:<6} {event_data.ret:<4} {filename}{error_mark}"
+        return "{:<22} {:<6} {:<8} {:<8} {:<6} {:<3} {:<16} {:<12} {:<6} {:<4} {}{}".format(
+            time_str, event_data.type_str, event_data.pid, event_data.tid, event_data.uid, 
+            event_data.cpu, comm, flag_names, event_data.mode, event_data.ret, filename, error_mark)
 
-    def _get_flag_names(self, flags: int) -> str:
+    def _get_flag_names(self, flags):
+        # type: (int) -> str
         """简化的标志位显示"""
         # 只显示主要的访问模式
         access_mode = flags & 0x3
@@ -135,7 +152,7 @@ class OpenMonitor(BaseMonitor):
         elif access_mode == 2:
             return "RDWR"
         else:
-            return f"0x{flags:X}"
+            return "0x{:X}".format(flags)
 
 
 if __name__ == '__main__':
@@ -171,7 +188,7 @@ if __name__ == '__main__':
         while monitor.is_running():
             time.sleep(1)
     except KeyboardInterrupt:
-        print()
+        print("")
         logger.info("用户中断，正在停止监控...")
     finally:
         monitor.stop()

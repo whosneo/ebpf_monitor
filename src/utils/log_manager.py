@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 日志管理器
@@ -10,9 +10,16 @@ import logging
 import logging.config
 import sys
 import threading
-from dataclasses import asdict
-from pathlib import Path
-from typing import Any, Dict
+# 兼容性导入
+try:
+    from typing import Any, Dict
+except ImportError:
+    from .py2_compat import Any, Dict
+
+try:
+    from pathlib import Path
+except ImportError:
+    from .py2_compat import Path
 
 from .config_manager import ConfigManager
 from .configs import LogConfig
@@ -42,19 +49,21 @@ class LogManager:
                     cls._instance = super(LogManager, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, log_dir: str = "logs"):
+    def __init__(self, log_dir="logs"):
+        # type: (str) -> None
         """初始化 LogManager"""
         if not hasattr(self, "_initialized"):  # 防止重复初始化
             self._initialized = False
             self._setup_log_manager(log_dir)
             self._initialized = True
 
-    def _setup_log_manager(self, log_dir: str):
+    def _setup_log_manager(self, log_dir):
+        # type: (str) -> None
         """
         初始化日志系统，从配置中加载日志设置。
         """
         # 初始化日志记录器Map
-        self.loggers: Dict[str, logging.Logger] = {}
+        self.loggers = {}  # type: Dict[str, logging.Logger]
 
         self.config_manager = ConfigManager()
 
@@ -69,9 +78,14 @@ class LogManager:
         self.logger = self.get_logger(self)
         self.logger.info("日志管理器初始化完成")
 
-    def _apply_config(self, config: LogConfig):
+    def _apply_config(self, config):
+        # type: (LogConfig) -> None
         """应用配置"""
-        log_config = asdict(config)
+        # 将配置对象转换为字典
+        log_config = {}
+        for key, value in config.__dict__.items():
+            if not key.startswith('_'):
+                log_config[key] = value
 
         self.level = LEVEL_MAP.get(config.level.upper(), logging.INFO)
 
@@ -79,7 +93,7 @@ class LogManager:
         for handler in log_config["handlers"].values():
             if handler.get("class") == "logging.handlers.TimedRotatingFileHandler":
                 if "filename" in handler:
-                    handler["filename"] = self.log_dir / handler["filename"]
+                    handler["filename"] = str(self.log_dir / handler["filename"])
             handler["formatter"] = "detailed" if self.level <= logging.DEBUG else "simple"
 
         # 确保配置中包含loggers部分
@@ -103,7 +117,8 @@ class LogManager:
         # 应用日志配置
         logging.config.dictConfig(log_config)
 
-    def get_logger(self, obj: Any = None):
+    def get_logger(self, obj=None):
+        # type: (Any) -> logging.Logger
         """获取指定名称的logger或者根据对象获取logger"""
         if isinstance(obj, str):
             name = obj
@@ -113,7 +128,7 @@ class LogManager:
             name = self.namespace
 
         if obj != self:
-            self.logger.debug(f"获取logger: {name}")
+            self.logger.debug("获取logger: {}".format(name))
 
         if name not in self.loggers:
             new_logger = logging.getLogger(name)
@@ -122,8 +137,7 @@ class LogManager:
             # 检查logger是否正确配置，避免在logger上调用warning造成循环
             if not self._initialized and not new_logger.handlers and not new_logger.parent.handlers:
                 # 使用标准错误输出而不是logger本身来输出警告
-                print(f"警告: Logger \"{name}\" 未配置handlers。"
-                      f"日志配置可能存在问题。", file=sys.stderr)
+                sys.stderr.write("警告: Logger \"{}\" 未配置handlers。日志配置可能存在问题。\n".format(name))
 
             self.loggers[name] = new_logger
 
@@ -131,13 +145,13 @@ class LogManager:
 
     def set_level(self, level):
         """设置日志级别"""
-        self.logger.debug(f"设置日志级别为: {level}")
+        self.logger.debug("设置日志级别为: {}".format(level))
         self.level = level
         logging.getLogger().setLevel(level)
         logging.getLogger(self.namespace).setLevel(level)
         for logger in self.loggers.values():
             logger.setLevel(level)
-        self.logger.debug(f"设置日志级别完成")
+        self.logger.debug("设置日志级别完成")
 
     def get_log_file_path(self):
         """

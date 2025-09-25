@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 监控器注册管理器
@@ -8,9 +8,11 @@
 """
 
 import importlib
-from typing import Dict, Type, List
-
-from typing import TYPE_CHECKING
+# 兼容性导入
+try:
+    from typing import Dict, Type, List, TYPE_CHECKING
+except ImportError:
+    from .py2_compat import Dict, Type, List, TYPE_CHECKING
 
 from ..monitors.base import BaseMonitor
 
@@ -27,7 +29,8 @@ class MonitorRegistry:
     不再使用单例模式，通过依赖注入获取所需组件。
     """
 
-    def __init__(self, context: 'ApplicationContext'):
+    def __init__(self, context):
+        # type: ('ApplicationContext') -> None
         """
         初始化注册管理器
         
@@ -53,29 +56,30 @@ class MonitorRegistry:
             # 过滤掉 base.py（基类，不是具体监控器）和下划线开头的文件
             monitor_files = [f for f in monitor_files if f.name != "base.py" and not f.name.startswith("_")]
 
-            self.logger.debug(f"发现 {len(monitor_files)} 个监控器模块文件")
+            self.logger.debug("发现 {} 个监控器模块文件".format(len(monitor_files)))
 
             for monitor_file in monitor_files:
                 module_name = monitor_file.stem  # 去掉 .py 后缀
 
                 try:
                     # 动态导入模块，触发 @register_monitor 装饰器执行
-                    module_path = f"src.monitors.{module_name}"
+                    module_path = "src.monitors.{}".format(module_name)
                     importlib.import_module(module_path)
-                    self.logger.debug(f"成功导入监控器模块: {module_name}")
+                    self.logger.debug("成功导入监控器模块: {}".format(module_name))
                 except ImportError as e:
-                    self.logger.warning(f"导入监控器模块失败 {module_name}: {e}")
+                    self.logger.warning("导入监控器模块失败 {}: {}".format(module_name, e))
                 except Exception as e:
-                    self.logger.error(f"导入监控器模块时发生错误 {module_name}: {e}")
+                    self.logger.error("导入监控器模块时发生错误 {}: {}".format(module_name, e))
 
             from .decorators import MONITOR_REGISTRY
-            self.logger.info(f"自动发现完成，注册了 {len(MONITOR_REGISTRY)} 个监控器")
+            self.logger.info("自动发现完成，注册了 {} 个监控器".format(len(MONITOR_REGISTRY)))
 
         except Exception as e:
-            self.logger.error(f"自动发现监控器失败: {e}")
+            self.logger.error("自动发现监控器失败: {}".format(e))
 
     @staticmethod
-    def get_registered_monitors() -> Dict[str, Type[BaseMonitor]]:
+    def get_registered_monitors():
+        # type: () -> Dict[str, Type[BaseMonitor]]
         """
         获取已注册的监控器
         
@@ -85,7 +89,8 @@ class MonitorRegistry:
         from .decorators import MONITOR_REGISTRY
         return MONITOR_REGISTRY.copy()
 
-    def get_monitor_names(self) -> List[str]:
+    def get_monitor_names(self):
+        # type: () -> List[str]
         """
         获取所有已注册的监控器名称
         
@@ -94,7 +99,8 @@ class MonitorRegistry:
         """
         return list(self.get_registered_monitors().keys())
 
-    def is_monitor_registered(self, monitor_name: str) -> bool:
+    def is_monitor_registered(self, monitor_name):
+        # type: (str) -> bool
         """
         检查监控器是否已注册
         
@@ -106,7 +112,8 @@ class MonitorRegistry:
         """
         return monitor_name in self.get_registered_monitors()
 
-    def get_monitor_class(self, monitor_name: str) -> Type:
+    def get_monitor_class(self, monitor_name):
+        # type: (str) -> Type
         """
         获取指定监控器的类
         
@@ -121,10 +128,11 @@ class MonitorRegistry:
         """
         registered_monitors = self.get_registered_monitors()
         if monitor_name not in registered_monitors:
-            raise KeyError(f"监控器 '{monitor_name}' 未注册")
+            raise KeyError("监控器 '{}' 未注册".format(monitor_name))
         return registered_monitors[monitor_name]
 
-    def get_statistics(self) -> Dict[str, any]:
+    def get_statistics(self):
+        # type: () -> Dict[str, any]
         """
         获取注册统计信息
         
@@ -148,8 +156,8 @@ if __name__ == "__main__":
 
     # 发现并注册监控器
     test_monitors = test_registry.get_registered_monitors()
-    print(f"发现的监控器: {list(test_monitors.keys())}")
+    print("发现的监控器: {}".format(list(test_monitors.keys())))
 
     # 获取统计信息
     test_stats = test_registry.get_statistics()
-    print(f"统计信息: {test_stats}")
+    print("统计信息: {}".format(test_stats))

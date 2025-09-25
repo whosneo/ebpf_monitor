@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 内核兼容性检查器
@@ -12,9 +12,16 @@ import errno
 import os
 import platform
 import subprocess
-from typing import Any, Dict, List, Tuple
-
-from typing import TYPE_CHECKING
+# 兼容性导入
+try:
+    from typing import Any, Dict, List, Tuple, TYPE_CHECKING
+except ImportError:
+    # Python 2.7 fallback
+    Any = object
+    Dict = dict
+    List = list
+    Tuple = tuple
+    TYPE_CHECKING = False
 
 if TYPE_CHECKING:
     # noinspection PyUnusedImports
@@ -29,7 +36,8 @@ class CapabilityChecker:
     不再使用单例模式，通过依赖注入获取所需组件。
     """
 
-    def __init__(self, context: 'ApplicationContext'):
+    def __init__(self, context):
+        # type: ('ApplicationContext') -> None
         """
         初始化内核兼容性检查器
         
@@ -41,14 +49,17 @@ class CapabilityChecker:
 
         # 解析内核信息
         self.kernel_version = self._get_kernel_version()
-        self.kernel_release = platform.uname().release
+        # Python 2.7 compatibility - uname() returns tuple, not namedtuple
+        uname_result = platform.uname()
+        self.kernel_release = uname_result[2] if isinstance(uname_result, tuple) else uname_result.release
         self.architecture = self._get_architecture()
 
         # 缓存检查结果
         self._ebpf_support_cache = None
         self._capabilities_cache = None
 
-    def _get_kernel_version(self) -> Tuple[int, int, int]:
+    def _get_kernel_version(self):
+        # type: () -> Tuple[int, int, int]
         """
         获取内核版本
 
@@ -56,7 +67,9 @@ class CapabilityChecker:
             Tuple[int, int, int]: (major, minor, patch) 版本号
         """
         try:
-            kernel_release = platform.uname().release
+            # Python 2.7 compatibility - uname() returns tuple, not namedtuple
+            uname_result = platform.uname()
+            kernel_release = uname_result[2] if isinstance(uname_result, tuple) else uname_result.release
             # 解析版本号，处理像 "4.19.90-2107.6.0.el7.x86_64" 这样的版本
             version_parts = kernel_release.split(".")
 
@@ -70,19 +83,21 @@ class CapabilityChecker:
                 if patch_str.isdigit():
                     patch = int(patch_str)
 
-            self.logger.debug(f"解析内核版本: {kernel_release} -> ({major}, {minor}, {patch})")
+            self.logger.debug("解析内核版本: {} -> ({}, {}, {})".format(kernel_release, major, minor, patch))
             return major, minor, patch
 
         except Exception as e:
-            self.logger.error(f"解析内核版本失败: {e}")
+            self.logger.error("解析内核版本失败: {}".format(e))
             return 0, 0, 0
 
     @staticmethod
-    def _get_architecture() -> str:
+    def _get_architecture():
+        # type: () -> str
         """获取系统架构"""
         return platform.machine()
 
-    def check_minimum_kernel_version(self, min_major: int = 4, min_minor: int = 1) -> bool:
+    def check_minimum_kernel_version(self, min_major=3, min_minor=10):
+        # type: (int, int) -> bool
         """
         检查是否满足最低内核版本要求
 
@@ -101,11 +116,12 @@ class CapabilityChecker:
             return True
         else:
             self.logger.warning(
-                f"内核版本 {major}.{minor} 低于最低要求 {min_major}.{min_minor}"
+                "内核版本 {}.{} 低于最低要求 {}.{}".format(major, minor, min_major, min_minor)
             )
             return False
 
-    def check_ebpf_syscall_support(self) -> bool:
+    def check_ebpf_syscall_support(self):
+        # type: () -> bool
         """
         检查eBPF系统调用支持
 
@@ -127,13 +143,14 @@ class CapabilityChecker:
             if e.errno == errno.ENOSYS:
                 self.logger.error("eBPF系统调用不支持 (ENOSYS)")
             else:
-                self.logger.error(f"eBPF系统调用检查失败: {e}")
+                self.logger.error("eBPF系统调用检查失败: {}".format(e))
             return False
         except Exception as e:
-            self.logger.error(f"eBPF系统调用检查异常: {e}")
+            self.logger.error("eBPF系统调用检查异常: {}".format(e))
             return False
 
-    def check_ebpf_filesystem(self) -> bool:
+    def check_ebpf_filesystem(self):
+        # type: () -> bool
         """
         检查eBPF文件系统支持
 
@@ -149,7 +166,8 @@ class CapabilityChecker:
             self.logger.warning("eBPF文件系统未挂载或不可访问")
             return False
 
-    def check_bpftool_availability(self) -> bool:
+    def check_bpftool_availability(self):
+        # type: () -> bool
         """
         检查bpftool工具可用性
 
@@ -157,33 +175,39 @@ class CapabilityChecker:
             bool: bpftool是否可用
         """
         try:
-            result = subprocess.run(
+            # Python 2.7兼容性：使用Popen替代subprocess.run
+            process = subprocess.Popen(
                 ["bpftool", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
             )
-
-            if result.returncode == 0:
-                version_info = result.stdout.strip()
-                self.logger.debug(f"bpftool可用: {version_info}")
+            
+            # 等待进程完成
+            stdout, stderr = process.communicate()
+            
+            if process.returncode == 0:
+                version_info = stdout.strip().decode('utf-8') if isinstance(stdout, bytes) else stdout.strip()
+                self.logger.debug("bpftool可用: {}".format(version_info))
                 return True
             else:
                 self.logger.debug("bpftool命令执行失败")
                 return False
 
-        except FileNotFoundError:
+        except (OSError, IOError):
+            # Python 2.7 compatibility - FileNotFoundError doesn't exist
             self.logger.debug("bpftool未安装")
             return False
-        except subprocess.TimeoutExpired:
-            self.logger.warning("bpftool检查超时")
-            return False
         except Exception as e:
-            self.logger.warning(f"bpftool检查异常: {e}")
+            # Python 2.7 compatibility - TimeoutExpired doesn't exist
+            if 'timeout' in str(e).lower():
+                self.logger.warning("bpftool检查超时")
+            else:
+                self.logger.warning("bpftool检查异常: {}".format(e))
             return False
 
     @staticmethod
-    def check_root_privileges() -> bool:
+    def check_root_privileges():
+        # type: () -> bool
         """
         检查root权限
 
@@ -192,7 +216,8 @@ class CapabilityChecker:
         """
         return os.geteuid() == 0
 
-    def check_ebpf_support(self) -> bool:
+    def check_ebpf_support(self):
+        # type: () -> bool
         """
         综合检查eBPF支持
 
@@ -211,15 +236,16 @@ class CapabilityChecker:
         all_passed = True
         for check_name, result in checks:
             if not result:
-                self.logger.error(f"eBPF支持检查失败: {check_name}")
+                self.logger.error("eBPF支持检查失败: {}".format(check_name))
                 all_passed = False
             else:
-                self.logger.debug(f"eBPF支持检查通过: {check_name}")
+                self.logger.debug("eBPF支持检查通过: {}".format(check_name))
 
         self._ebpf_support_cache = all_passed
         return all_passed
 
-    def get_available_capabilities(self) -> Dict[str, bool]:
+    def get_available_capabilities(self):
+        # type: () -> Dict[str, bool]
         """
         获取可用的内核功能
 
@@ -252,7 +278,8 @@ class CapabilityChecker:
         return capabilities
 
     @staticmethod
-    def _check_kprobe_support() -> bool:
+    def _check_kprobe_support():
+        # type: () -> bool
         """检查kprobe支持"""
         kprobe_path = "/sys/kernel/debug/tracing/kprobe_events"
         alt_kprobe_path = "/sys/kernel/tracing/kprobe_events"
@@ -260,7 +287,8 @@ class CapabilityChecker:
         return os.path.exists(kprobe_path) or os.path.exists(alt_kprobe_path)
 
     @staticmethod
-    def _check_tracepoint_support() -> bool:
+    def _check_tracepoint_support():
+        # type: () -> bool
         """检查tracepoint支持"""
         tracepoint_path = "/sys/kernel/debug/tracing/events"
         alt_tracepoint_path = "/sys/kernel/tracing/events"
@@ -268,12 +296,14 @@ class CapabilityChecker:
         return os.path.exists(tracepoint_path) or os.path.exists(alt_tracepoint_path)
 
     @staticmethod
-    def _check_perf_event_support() -> bool:
+    def _check_perf_event_support():
+        # type: () -> bool
         """检查perf event支持"""
         perf_path = "/proc/sys/kernel/perf_event_paranoid"
         return os.path.exists(perf_path)
 
-    def get_compile_flags(self) -> List[str]:
+    def get_compile_flags(self):
+        # type: () -> List[str]
         """
         根据内核版本获取eBPF编译标志
 
@@ -303,10 +333,11 @@ class CapabilityChecker:
         if (major, minor) >= (5, 8):
             flags.append("-DSECURITY_FEATURES")
 
-        self.logger.debug(f"eBPF编译标志: {flags}")
+        self.logger.debug("eBPF编译标志: {}".format(flags))
         return flags
 
-    def validate_environment(self) -> bool:
+    def validate_environment(self):
+        # type: () -> bool
         """
         验证完整的运行环境
 
@@ -328,7 +359,8 @@ class CapabilityChecker:
         self.logger.info("环境兼容性验证通过")
         return True
 
-    def get_system_info(self) -> Dict[str, Any]:
+    def get_system_info(self):
+        # type: () -> Dict[str, Any]
         """
         获取系统信息摘要
 
@@ -353,18 +385,18 @@ if __name__ == "__main__":
     capability = test_context.get_capability_checker()
 
     print("=== 内核兼容性检查 ===")
-    print(f"内核版本: {capability.kernel_version}")
-    print(f"系统架构: {capability.architecture}")
-    print(f"eBPF支持: {capability.check_ebpf_support()}")
-    print(f"Root权限: {capability.check_root_privileges()}")
+    print("内核版本: {}".format(capability.kernel_version))
+    print("系统架构: {}".format(capability.architecture))
+    print("eBPF支持: {}".format(capability.check_ebpf_support()))
+    print("Root权限: {}".format(capability.check_root_privileges()))
 
     print("\n=== 可用功能 ===")
     test_capabilities = capability.get_available_capabilities()
     for name, available in test_capabilities.items():
         status = "✅" if available else "❌"
-        print(f"{status} {name}")
+        print("{} {}".format(status, name))
 
-    print(f"\n=== 编译标志 ===")
+    print("\n=== 编译标志 ===")
     test_flags = capability.get_compile_flags()
     for flag in test_flags:
-        print(f"  {flag}")
+        print("  {}".format(flag))

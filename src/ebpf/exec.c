@@ -1,15 +1,13 @@
-/* eBPF exec_monitor 程序 - 使用syscalls tracepoint监控execve系统调用
+/* eBPF exec_monitor 程序 - 使用kprobe监控execve系统调用（老内核兼容版本）
  * 
- * 采用Syscalls Tracepoint机制的优势：
- * 1. 精确性：直接监控execve系统调用的入口和出口，获取准确的调用信息
- * 2. 完整参数：能够在系统调用入口获取完整的execve参数信息
- * 3. 稳定性：syscalls tracepoint是内核提供的稳定ABI
- * 4. 性能：相比kprobe，tracepoint开销更小，对系统性能影响更小
- * 5. 时序准确：能够精确测量execve系统调用的执行时间
+ * 采用kprobe机制的优势：
+ * 1. 兼容性：支持老内核（如RHEL 7 / 内核3.10），无需syscalls tracepoint
+ * 2. 稳定性：kprobe是成熟稳定的内核功能
+ * 3. 功能完整：能够获取execve的完整参数信息
  * 
- * 使用的Tracepoint：
- * - syscalls:sys_enter_execve: 监控execve系统调用入口
- * - syscalls:sys_exit_execve: 监控execve系统调用出口
+ * 使用的探测点：
+ * - kprobe:sys_execve: 监控execve系统调用入口
+ * - kretprobe:sys_execve: 监控execve系统调用返回
  */
 #include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
@@ -48,34 +46,25 @@ static inline bool is_target_user(u32 uid) {
     return true;
 }
 
-/* 公共：获取 ppid */
+/* 公共：获取 ppid - 兼容旧内核版本 */
 static inline void get_ppid(u32 *ppid) {
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    if (task && task->real_parent) {
-        bpf_probe_read_kernel(ppid, sizeof(u32), &task->real_parent->tgid);
+    if (task) {
+        // 先读取real_parent指针
+        struct task_struct *parent;
+        if (bpf_probe_read(&parent, sizeof(parent), &task->real_parent) == 0 && parent) {
+            // 再读取父进程的tgid
+            bpf_probe_read(ppid, sizeof(u32), &parent->tgid);
+        } else {
+            *ppid = 0;
+        }
     } else {
         *ppid = 0;
     }
 }
 
-// # cat /sys/kernel/debug/tracing/events/syscalls/sys_enter_execve/format
-// name: sys_enter_execve
-// ID: 684
-// format:
-// 	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
-// 	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
-// 	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
-// 	field:int common_pid;	offset:4;	size:4;	signed:1;
-
-// 	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
-// 	field:const char * filename;	offset:16;	size:8;	signed:0;
-// 	field:const char *const * argv;	offset:24;	size:8;	signed:0;
-// 	field:const char *const * envp;	offset:32;	size:8;	signed:0;
-
-// print fmt: "filename: 0x%08lx, argv: 0x%08lx, envp: 0x%08lx", ((unsigned long)(REC->filename)), ((unsigned long)(REC->argv)), ((unsigned long)(REC->envp))
-
-/* 入口：syscalls:sys_enter_execve */
-TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
+/* 入口：kprobe:sys_execve */
+int trace_execve_entry(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     if (!is_target_process(pid)) {
@@ -100,30 +89,32 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
     event.argv[0] = '\0';
     int argv_len = 0;
 
-    // 尝试获取argv参数 - 手动展开循环避免验证器限制
-    if (args->argv) {
-        char **argv_ptr = (char **)args->argv;
+    // 从寄存器获取execve参数：PT_REGS_PARM1=filename, PT_REGS_PARM2=argv
+    const char *const *argv = (const char *const *)PT_REGS_PARM2(ctx);
+    if (argv) {
+        char **argv_ptr = (char **)argv;
         char temp_arg[16] = {0};  // 减少缓冲区大小
-        
+
         // 手动展开前4个参数的读取
         #define READ_ARG(idx) do { \
             if (argv_len >= ARGSIZE - 20) break; \
             char *arg_ptr; \
-            if (bpf_probe_read_user(&arg_ptr, sizeof(arg_ptr), (void *)(argv_ptr + idx)) != 0 || !arg_ptr) break; \
+            if (bpf_probe_read(&arg_ptr, sizeof(arg_ptr), (void *)(argv_ptr + idx)) != 0 || !arg_ptr) break; \
             if (idx > 0 && argv_len < ARGSIZE - 2) event.argv[argv_len++] = ' '; \
             __builtin_memset(temp_arg, 0, sizeof(temp_arg)); \
-            if (bpf_probe_read_user_str(temp_arg, sizeof(temp_arg), arg_ptr) > 0) { \
+            if (bpf_probe_read(temp_arg, sizeof(temp_arg) - 1, arg_ptr) == 0) { \
+                temp_arg[sizeof(temp_arg) - 1] = '\0'; \
                 for (int j = 0; j < 15 && temp_arg[j] != '\0' && argv_len < ARGSIZE - 1; j++) { \
                     event.argv[argv_len++] = temp_arg[j]; \
                 } \
             } \
         } while(0)
-        
+
         READ_ARG(0);
         READ_ARG(1);
         READ_ARG(2);
         READ_ARG(3);
-        
+
         #undef READ_ARG
     }
     event.argv[argv_len] = '\0';  // null 结尾
@@ -132,22 +123,8 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
     return 0;
 }
 
-// # cat /sys/kernel/debug/tracing/events/syscalls/sys_exit_execve/format
-// name: sys_exit_execve
-// ID: 683
-// format:
-//         field:unsigned short common_type;       offset:0;       size:2; signed:0;
-//         field:unsigned char common_flags;       offset:2;       size:1; signed:0;
-//         field:unsigned char common_preempt_count;       offset:3;       size:1; signed:0;
-//         field:int common_pid;   offset:4;       size:4; signed:1;
-
-//         field:int __syscall_nr; offset:8;       size:4; signed:1;
-//         field:long ret; offset:16;      size:8; signed:1;
-
-// print fmt: "0x%lx", REC->ret
-
-/* 出口：syscalls:sys_exit_execve */
-TRACEPOINT_PROBE(syscalls, sys_exit_execve) {
+/* 出口：kretprobe:sys_execve */
+int trace_execve_return(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     if (!is_target_process(pid)) {
@@ -165,8 +142,8 @@ TRACEPOINT_PROBE(syscalls, sys_exit_execve) {
         return 0;
     }
 
-    event->ret = args->ret;
-    exec_events.perf_submit(args, event, sizeof(*event));
+    event->ret = PT_REGS_RC(ctx);
+    exec_events.perf_submit(ctx, event, sizeof(*event));
     exec_info.delete(&pid_tgid);
     return 0;
 }

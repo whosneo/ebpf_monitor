@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 页面错误监控器
@@ -8,7 +8,11 @@
 """
 
 import ctypes as ct
-from typing import Dict, List, Any
+# 兼容性导入
+try:
+    from typing import Dict, List, Any
+except ImportError:
+    from ..utils.py2_compat import Dict, List, Any
 
 from .base import BaseEvent, BaseMonitor
 from ..utils.data_processor import DataProcessor
@@ -27,7 +31,8 @@ class PageFaultEvent(BaseEvent):
     ]
 
     @property
-    def fault_type_str(self) -> str:
+    def fault_type_str(self):
+        # type: () -> str
         """获取错误类型字符串"""
         types = []
         if self.fault_type & PageFaultMonitor.FAULT_TYPE_MINOR:
@@ -45,42 +50,48 @@ class PageFaultEvent(BaseEvent):
         return "|".join(types) if types else "UNKNOWN"
 
     @property
-    def is_major_fault(self) -> bool:
+    def is_major_fault(self):
+        # type: () -> bool
         """是否为主要页面错误"""
         return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_MAJOR)
 
     @property
-    def is_minor_fault(self) -> bool:
+    def is_minor_fault(self):
+        # type: () -> bool
         """是否为次要页面错误"""
         return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_MINOR)
 
     @property
-    def is_write_fault(self) -> bool:
+    def is_write_fault(self):
+        # type: () -> bool
         """是否为写错误"""
         return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_WRITE)
 
     @property
-    def is_user_fault(self) -> bool:
+    def is_user_fault(self):
+        # type: () -> bool
         """是否为用户空间错误"""
         return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_USER)
 
     @property
-    def is_shared_fault(self) -> bool:
+    def is_shared_fault(self):
+        # type: () -> bool
         """是否为共享内存错误"""
         return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_SHARED)
 
     @property
-    def address_hex(self) -> str:
+    def address_hex(self):
+        # type: () -> str
         """获取格式化的内存地址"""
-        return f"0x{self.address:x}"
+        return "0x{:x}".format(self.address)
 
 
 @register_monitor("page_fault")
 class PageFaultMonitor(BaseMonitor):
     """页面错误监控器"""
-    EVENT_TYPE: type = PageFaultEvent
+    EVENT_TYPE = PageFaultEvent  # type: type
 
-    REQUIRED_TRACEPOINTS: List[str] = [
+    REQUIRED_TRACEPOINTS = [  # type: List[str]
         'exceptions:page_fault_user',
         'exceptions:page_fault_kernel'
     ]
@@ -100,7 +111,8 @@ class PageFaultMonitor(BaseMonitor):
     PRESSURE_HIGH = 3
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls):
+        # type: () -> Dict[str, Any]
         """获取页面错误监控器默认配置"""
         return {
             "enabled": True,
@@ -112,7 +124,8 @@ class PageFaultMonitor(BaseMonitor):
         }
 
     @classmethod
-    def validate_monitor_config(cls, config: Dict[str, Any]):
+    def validate_monitor_config(cls, config):
+        # type: (Dict[str, Any]) -> None
         """验证页面错误监控器配置"""
         # 验证监控开关配置
         assert config.get("monitor_major_faults") is not None, "monitor_major_faults不能为空"
@@ -130,7 +143,8 @@ class PageFaultMonitor(BaseMonitor):
         assert config.get("monitor_kernel_faults") is not None, "monitor_kernel_faults不能为空"
         assert isinstance(config.get("monitor_kernel_faults"), bool), "monitor_kernel_faults必须为布尔值"
 
-    def _initialize(self, config: Dict[str, Any]):
+    def _initialize(self, config):
+        # type: (Dict[str, Any]) -> None
         """初始化页面错误监控器"""
         self.enabled = config.get("enabled")
         
@@ -141,7 +155,8 @@ class PageFaultMonitor(BaseMonitor):
         self.monitor_user_faults = config.get("monitor_user_faults")
         self.monitor_kernel_faults = config.get("monitor_kernel_faults")
 
-    def _should_handle_event(self, event: PageFaultEvent) -> bool:
+    def _should_handle_event(self, event):
+        # type: (PageFaultEvent) -> bool
         """检查是否应该处理事件"""
         # 根据错误类型过滤
         if event.is_major_fault and not self.monitor_major_faults:
@@ -158,13 +173,15 @@ class PageFaultMonitor(BaseMonitor):
 
         return True
 
-    def _is_high_latency_event(self, event: PageFaultEvent) -> bool:
+    def _is_high_latency_event(self, event):
+        # type: (PageFaultEvent) -> bool
         """判断是否为高延迟事件"""
         return event.duration_us >= self.high_latency_threshold_us
 
     # ==================== 格式化方法实现 ====================
 
-    def get_csv_header(self) -> List[str]:
+    def get_csv_header(self):
+        # type: () -> List[str]
         """获取CSV头部字段"""
         return [
             'timestamp', 'time_str', 'pid', 'tid', 'comm', 
@@ -172,7 +189,8 @@ class PageFaultMonitor(BaseMonitor):
             'cpu', 'is_major_fault', 'is_minor_fault', 'is_write_fault', 'is_user_fault'
         ]
 
-    def format_for_csv(self, event_data: PageFaultEvent) -> Dict[str, Any]:
+    def format_for_csv(self, event_data):
+        # type: (PageFaultEvent) -> Dict[str, Any]
         """将事件数据格式化为CSV行数据"""
         timestamp = self._convert_timestamp(event_data)
         time_str = DataProcessor.format_timestamp(timestamp)
@@ -189,14 +207,17 @@ class PageFaultMonitor(BaseMonitor):
         
         return dict(zip(self.get_csv_header(), values))
 
-    def get_console_header(self) -> str:
+    def get_console_header(self):
+        # type: () -> str
         """获取控制台输出的表头"""
-        return f"{'TIME':<22} {'PID':<8} {'TID':<8} {'COMM':<16} {'CPU':<3} {'ADDRESS':<18} {'FAULT_TYPE':<12}"
+        return "{:<22} {:<8} {:<8} {:<16} {:<3} {:<18} {:<12}".format(
+            'TIME', 'PID', 'TID', 'COMM', 'CPU', 'ADDRESS', 'FAULT_TYPE')
 
-    def format_for_console(self, event_data: PageFaultEvent) -> str:
+    def format_for_console(self, event_data):
+        # type: (PageFaultEvent) -> str
         """将事件数据格式化为控制台输出"""
         timestamp = self._convert_timestamp(event_data)
-        time_str = f"[{DataProcessor.format_timestamp(timestamp)}]"
+        time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
 
         # 处理字节字符串
         comm = DataProcessor.decode_bytes(event_data.comm)
@@ -214,7 +235,9 @@ class PageFaultMonitor(BaseMonitor):
         if event_data.is_user_fault:
             fault_type_display += "|USER"
 
-        return f"{time_str:<22} {event_data.pid:<8} {event_data.tid:<8} {comm:<16} {event_data.cpu:<3} {event_data.address_hex:<18} {fault_type_display:<12}"
+        return "{:<22} {:<8} {:<8} {:<16} {:<3} {:<18} {:<12}".format(
+            time_str, event_data.pid, event_data.tid, comm, event_data.cpu, 
+            event_data.address_hex, fault_type_display)
 
 
 if __name__ == '__main__':
@@ -250,7 +273,7 @@ if __name__ == '__main__':
         while monitor.is_running():
             time.sleep(1)
     except KeyboardInterrupt:
-        print()
+        print("")
         logger.info("用户中断，正在停止监控...")
     finally:
         monitor.stop()

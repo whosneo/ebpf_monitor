@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 中断监控器
@@ -8,7 +8,13 @@
 """
 
 import ctypes as ct
-from typing import Dict, List, Any
+try:
+    from typing import Dict, List, Any
+except ImportError:
+    # Python 2.7 fallback
+    Dict = dict
+    List = list
+    Any = object
 
 import psutil
 
@@ -32,7 +38,8 @@ class InterruptEvent(BaseEvent):
     ]
 
     @property
-    def irq_type_str(self) -> str:
+    def irq_type_str(self):
+        # type: () -> str
         """获取中断类型字符串"""
         types = []
         if self.irq_type & InterruptMonitor.IRQ_TYPE_HARDWARE:
@@ -52,12 +59,14 @@ class InterruptEvent(BaseEvent):
         return "|".join(types) if types else "UNKNOWN"
 
     @property
-    def duration_us(self) -> float:
+    def duration_us(self):
+        # type: () -> float
         """获取中断持续时间（微秒）"""
         return self.duration_ns / 1000.0
 
     @property
-    def duration_ms(self) -> float:
+    def duration_ms(self):
+        # type: () -> float
         """获取中断持续时间（毫秒）"""
         return self.duration_ns / 1000000.0
 
@@ -65,9 +74,9 @@ class InterruptEvent(BaseEvent):
 @register_monitor("interrupt")
 class InterruptMonitor(BaseMonitor):
     """中断监控器"""
-    EVENT_TYPE: type = InterruptEvent
+    EVENT_TYPE = InterruptEvent  # type: type
 
-    REQUIRED_TRACEPOINTS: List[str] = [
+    REQUIRED_TRACEPOINTS = [  # type: List[str]
         'irq:irq_handler_entry',
         'irq:irq_handler_exit',
         'irq:softirq_entry',
@@ -99,7 +108,8 @@ class InterruptMonitor(BaseMonitor):
     IRQ_TYPE_AFFINITY = 0x8000
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls):
+        # type: () -> Dict[str, Any]
         """获取默认配置"""
         return {
             "enabled": True,
@@ -112,7 +122,8 @@ class InterruptMonitor(BaseMonitor):
         }
 
     @classmethod
-    def validate_monitor_config(cls, config: Dict[str, Any]):
+    def validate_monitor_config(cls, config):
+        # type: (Dict[str, Any]) -> None
         """验证中断监控器配置"""
         assert config.get("monitor_hardware") is not None, "monitor_hardware不能为空"
         assert isinstance(config.get("monitor_hardware"), bool), "monitor_hardware必须为布尔值"
@@ -132,7 +143,8 @@ class InterruptMonitor(BaseMonitor):
         assert config.get("monitor_migration") is not None, "monitor_migration不能为空"
         assert isinstance(config.get("monitor_migration"), bool), "monitor_migration必须为布尔值"
 
-    def _initialize(self, config: Dict[str, Any]):
+    def _initialize(self, config):
+        # type: (Dict[str, Any]) -> None
         """初始化中断监控器"""
         self.enabled = config.get("enabled")
         # CPU信息
@@ -146,7 +158,8 @@ class InterruptMonitor(BaseMonitor):
         self.monitor_block = config.get("monitor_block")
         self.monitor_migration = config.get("monitor_migration")
 
-    def _should_handle_event(self, event: InterruptEvent) -> bool:
+    def _should_handle_event(self, event):
+        # type: (InterruptEvent) -> bool
         """检查是否应该处理事件"""
         if self.monitor_hardware and event.irq_type & self.IRQ_TYPE_HARDWARE:
             return True
@@ -164,11 +177,13 @@ class InterruptMonitor(BaseMonitor):
 
     # ==================== 格式化方法实现 ====================
 
-    def get_csv_header(self) -> List[str]:
+    def get_csv_header(self):
+        # type: () -> List[str]
         """获取CSV头部字段"""
         return ['timestamp', 'time_str', 'irq_num', 'irq_type', 'irq_type_str', 'irq_name', 'comm', 'pid', 'tid', 'duration_ns', 'duration_us', 'cpu', 'softirq_vec', 'orig_cpu', 'dest_cpu']
 
-    def format_for_csv(self, event_data: InterruptEvent) -> Dict[str, Any]:
+    def format_for_csv(self, event_data):
+        # type: (InterruptEvent) -> Dict[str, Any]
         """将事件数据格式化为CSV行数据"""
         timestamp = self._convert_timestamp(event_data)
         time_str = DataProcessor.format_timestamp(timestamp)
@@ -189,14 +204,16 @@ class InterruptMonitor(BaseMonitor):
         
         return dict(zip(self.get_csv_header(), values))
 
-    def get_console_header(self) -> str:
+    def get_console_header(self):
+        # type: () -> str
         """获取控制台输出的表头"""
-        return f"{'TIME':<22} {'IRQ_TYPE':<8} {'IRQ':<4} {'DURATION':<10} {'CPU':<3} {'PID':<8} {'COMM':<16} {'NAME/INFO'}"
+        return "{:<22} {:<8} {:<4} {:<10} {:<3} {:<8} {:<16} {}".format('TIME', 'IRQ_TYPE', 'IRQ', 'DURATION', 'CPU', 'PID', 'COMM', 'NAME/INFO')
 
-    def format_for_console(self, event_data: InterruptEvent) -> str:
+    def format_for_console(self, event_data):
+        # type: (InterruptEvent) -> str
         """将事件数据格式化为控制台输出"""
         timestamp = self._convert_timestamp(event_data)
-        time_str = f"[{DataProcessor.format_timestamp(timestamp)}]"
+        time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
 
         # 处理字节字符串
         comm = DataProcessor.decode_bytes(event_data.comm)
@@ -217,21 +234,21 @@ class InterruptMonitor(BaseMonitor):
         elif event_data.irq_type & self.IRQ_TYPE_MIGRATE:
             irq_type_str = 'MIGRATE'
         else:
-            irq_type_str = f'TYPE_{event_data.irq_type:X}'
+            irq_type_str = 'TYPE_{:X}'.format(event_data.irq_type)
 
         # 根据中断类型调整显示信息
         if event_data.irq_type & self.IRQ_TYPE_MIGRATE:
             # 进程迁移：显示 CPU迁移信息
             orig_cpu = event_data.irq_num      # 原CPU
             dest_cpu = event_data.softirq_vec  # 目标CPU
-            info_str = f"{irq_name} {orig_cpu}→{dest_cpu}"
+            info_str = "{} {}→{}".format(irq_name, orig_cpu, dest_cpu)
             duration_str = "-"
         else:
             # 普通中断：显示中断名称
             info_str = irq_name
-            duration_str = f"{event_data.duration_us:.2f}μs"
+            duration_str = "{:.2f}μs".format(event_data.duration_us)
         
-        return f"{time_str:<22} {irq_type_str:<8} {event_data.irq_num:<4} {duration_str:<10} {event_data.cpu:<3} {event_data.pid:<8} {comm:<16} {info_str}"
+        return "{:<22} {:<8} {:<4} {:<10} {:<3} {:<8} {:<16} {}".format(time_str, irq_type_str, event_data.irq_num, duration_str, event_data.cpu, event_data.pid, comm, info_str)
 
 
 if __name__ == '__main__':
@@ -267,7 +284,7 @@ if __name__ == '__main__':
         while monitor.is_running():
             time.sleep(1)
     except KeyboardInterrupt:
-        print()
+        print("")
         logger.info("用户中断，正在停止监控...")
     finally:
         monitor.stop()

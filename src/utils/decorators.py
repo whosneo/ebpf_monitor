@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # encoding: utf-8
 """
 监控工具装饰器
@@ -8,17 +8,22 @@
 
 import functools
 import sys
-from typing import Callable, Any, Dict, Type, TYPE_CHECKING
+# 兼容性导入
+try:
+    from typing import Callable, Any, Dict, Type, TYPE_CHECKING
+except ImportError:
+    from .py2_compat import Callable, Any, Dict, Type, TYPE_CHECKING
 
 if TYPE_CHECKING:
     # noinspection PyUnusedImports
     from ..monitors.base import BaseMonitor
 
 # 全局监控器注册表
-MONITOR_REGISTRY: Dict[str, Type['BaseMonitor']] = {}
+MONITOR_REGISTRY = {}  # type: Dict[str, Type['BaseMonitor']]
 
 
-def register_monitor(name: str):
+def register_monitor(name):
+    # type: (str) -> Callable
     """
     监控器注册装饰器
 
@@ -36,14 +41,16 @@ def register_monitor(name: str):
             pass
     """
 
-    def decorator(cls: Type['BaseMonitor']) -> Type['BaseMonitor']:
+    def decorator(cls):
+        # type: (Type['BaseMonitor']) -> Type['BaseMonitor']
         MONITOR_REGISTRY[name] = cls
         return cls
 
     return decorator
 
 
-def require_running(func: Callable) -> Callable:
+def require_running(func):
+    # type: (Callable) -> Callable
     """
     装饰器：要求监控工具处于运行状态
 
@@ -64,15 +71,16 @@ def require_running(func: Callable) -> Callable:
     """
 
     @functools.wraps(func)
-    def wrapper(self, *args, **kwargs) -> Any:
+    def wrapper(self, *args, **kwargs):
+        # type: (*Any, **Any) -> Any
         # 检查运行状态
         if not hasattr(self, "running") or not self.running:
             # 获取日志记录器
             logger = getattr(self, "logger", None)
             if logger:
-                logger.error(f"{self.__class__.__name__}未启动")
+                logger.error("{}未启动".format(self.__class__.__name__))
             else:
-                print(f"错误: {self.__class__.__name__}未启动", file=sys.stderr)  # 备用日志
+                sys.stderr.write("错误: {}未启动\n".format(self.__class__.__name__))  # 备用日志
 
             # 返回 False 表示操作失败
             return False
@@ -83,7 +91,8 @@ def require_running(func: Callable) -> Callable:
     return wrapper
 
 
-def require_bpf_loaded(func: Callable) -> Callable:
+def require_bpf_loaded(func):
+    # type: (Callable) -> Callable
     """
     装饰器：要求eBPF程序已加载
 
@@ -92,13 +101,14 @@ def require_bpf_loaded(func: Callable) -> Callable:
     """
 
     @functools.wraps(func)
-    def wrapper(self, *args, **kwargs) -> Any:
+    def wrapper(self, *args, **kwargs):
+        # type: (*Any, **Any) -> Any
         if not hasattr(self, "bpf") or self.bpf is None:  # 不可以使用not self.bpf，部分系统BPF对象属性不同。
             logger = getattr(self, "base_logger", getattr(self, "logger", None))
             if logger:
                 logger.error("eBPF程序未加载")
             else:
-                print("错误: eBPF程序未加载", file=sys.stderr)
+                sys.stderr.write("错误: eBPF程序未加载\n")
             return False
         else:
             return func(self, *args, **kwargs)
