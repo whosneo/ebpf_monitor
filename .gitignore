@@ -142,6 +142,11 @@ logs/*.log.*
 
 # 输出文件
 output/*.csv
+analysis/daily_data/*.csv
+analysis/reports/*.png
+analysis/reports/*.html
+analysis/reports/*/*.txt
+analysis/reports/*.md
 
 # 临时文件
 !temp/README.md
