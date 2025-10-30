@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 打包当前目录下的所有文件，排除指定目录和文件
-COPYFILE_DISABLE=1 tar -zcf ~/Downloads/ebpf-monitor-$(date +%Y%m%d).tar.gz \
+env COPYFILE_DISABLE=1 tar -zcf ~/Downloads/ebpf-monitor-$(date +%Y%m%d).tar.gz \
   --exclude='package.sh' \
   --exclude='tests' \
   --exclude='.pki' \
@@ -28,4 +28,13 @@ COPYFILE_DISABLE=1 tar -zcf ~/Downloads/ebpf-monitor-$(date +%Y%m%d).tar.gz \
   --exclude='*.pyo' \
   --exclude='tools' \
   --exclude='presentation' \
+  --exclude='output/*.csv' \
+  --exclude='logs/*.log' \
+  --exclude='logs/*.log.*' \
+  --exclude='temp/*.pid' \
+  --exclude='analysis/daily_data/*.csv' \
+  --exclude='analysis/reports/*.png' \
+  --exclude='analysis/reports/*.html' \
+  --exclude='analysis/reports/*/*.txt' \
+  --exclude='analysis/reports/*.md' \
   .
