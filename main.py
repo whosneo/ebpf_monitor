@@ -17,6 +17,7 @@ eBPF性能监控工具 - 主程序入口
 # 标准库导入
 import argparse
 import logging
+import os
 import sys
 import time
 
@@ -176,16 +177,13 @@ if __name__ == "__main__":
     logger.info("监控器注册表初始化完成")
 
     # 处理daemon模式 - 在创建监控器之前进行daemon化
-    is_daemon_child = False
-
     if args.daemon:
         logger.info("启动守护进程模式...")
         if not context.daemon_manager.daemonize():
             logger.error("守护进程化失败")
             sys.exit(1)
-        # 标记当前为daemon子进程
-        is_daemon_child = True
-        logger.info("守护进程化成功，继续初始化监控器...")
+        # daemonize()成功返回意味着当前是子进程，父进程已退出
+        logger.info("守护进程化成功，PID: {}".format(os.getpid()))
 
     selected_monitors = []  # type: List[str]
     if args.monitors:
@@ -211,7 +209,7 @@ if __name__ == "__main__":
             sys.exit(1)
 
         # 在daemon模式下，设置eBPF监控器实例到daemon管理器
-        if is_daemon_child:
+        if args.daemon:
             context.daemon_manager.set_ebpf_monitor(ebpf_monitor)
 
         # 启动监控
@@ -221,6 +219,10 @@ if __name__ == "__main__":
 
         try:
             while ebpf_monitor.is_running():
+                # 检查守护进程关闭请求
+                if args.daemon and context.daemon_manager.shutdown_requested.is_set():
+                    logger.info("收到守护进程关闭信号")
+                    break
                 time.sleep(1)
         except KeyboardInterrupt:
             print("")
@@ -230,11 +232,14 @@ if __name__ == "__main__":
         finally:
             ebpf_monitor.stop()
 
+            # 如果是守护进程模式，执行完整的关闭流程
+            if args.daemon:
+                context.daemon_manager.perform_shutdown()
+
     except Exception as e:
         logger.error("eBPF监控工具运行失败: {}".format(e))
         sys.exit(1)
     finally:
-        # 只在非daemon模式或daemon子进程中执行cleanup
-        # 避免父进程的cleanup影响子进程
-        if ebpf_monitor is not None and (not args.daemon or is_daemon_child):
+        # 清理资源
+        if ebpf_monitor is not None:
             ebpf_monitor.cleanup()
