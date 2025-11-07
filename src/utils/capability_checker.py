@@ -301,7 +301,7 @@ class CapabilityChecker:
     def get_compile_flags(self):
         # type: () -> List[str]
         """
-        根据内核版本获取eBPF编译标志
+        根据内核版本获取eBPF编译标志，可根据需要添加其他编译标志
 
         Returns:
             List[str]: 编译标志列表
@@ -309,25 +309,10 @@ class CapabilityChecker:
         flags = []
         major, minor = self.kernel_version[0], self.kernel_version[1]
 
-        # 基础内核版本支持（Linux 4.0+）
-        if (major, minor) >= (4, 0):
-            flags.append("-DKERNEL_VERSION_4_0_PLUS")
-
-        # 高级功能支持（Linux 4.18+）
-        if (major, minor) >= (4, 18):
-            flags.append("-DADVANCED_FEATURES")
-
-        # 进程执行监控特定功能（Linux 5.0+）
-        if (major, minor) >= (5, 0):
-            flags.append("-DENHANCED_PROCESS_INFO")
-
-        # 新的tracepoint支持（Linux 5.4+）
-        if (major, minor) >= (5, 4):
-            flags.append("-DNEW_TRACEPOINT_SUPPORT")
-
-        # 内核安全功能（Linux 5.8+）
-        if (major, minor) >= (5, 8):
-            flags.append("-DSECURITY_FEATURES")
+        # 系统调用包装器支持（Linux 4.17+）
+        # 4.17+ 内核使用 __x64_sys_* 等包装器，参数传递方式不同
+        if (major, minor) >= (4, 17):
+            flags.append("-DKERNEL_VERSION_4_17_PLUS")
 
         self.logger.debug("eBPF编译标志: {}".format(flags))
         return flags

@@ -58,14 +58,33 @@ class AppConfig(ValidatedConfig):
     @classmethod
     def validate(cls, config):
         # type: (Dict[str, Any]) -> 'AppConfig'
-        """验证应用配置"""
-        assert config is not None, "应用配置不能为空"
-        assert isinstance(config, dict), "应用配置必须为字典"
-        assert len(config) > 0, "应用配置不能为空"
-        assert config.get("name") is not None, "应用名称不能为空"
-        assert config.get("version") is not None, "版本号不能为空"
-        assert config.get("environment") is not None, "环境不能为空"
-        assert config.get("environment") in ["development", "production"], "环境必须是development或production"
+        """
+        验证应用配置
+        
+        Args:
+            config: 应用配置字典
+            
+        Returns:
+            AppConfig: 验证后的配置对象
+            
+        Raises:
+            ValueError: 配置验证失败时抛出
+        """
+        if config is None:
+            raise ValueError("应用配置不能为空。请在配置文件中添加'app'节")
+        if not isinstance(config, dict):
+            raise ValueError("应用配置必须为字典类型，当前类型: {}。请检查YAML格式".format(type(config).__name__))
+        if len(config) == 0:
+            raise ValueError("应用配置不能为空字典。请至少提供name、version和environment字段")
+        if config.get("name") is None:
+            raise ValueError("应用配置中缺少必需字段: name。示例: name: ebpf_monitor")
+        if config.get("version") is None:
+            raise ValueError("应用配置中缺少必需字段: version。示例: version: 1.0.0")
+        if config.get("environment") is None:
+            raise ValueError("应用配置中缺少必需字段: environment。示例: environment: production")
+        if config.get("environment") not in ["development", "production"]:
+            raise ValueError(
+                "environment 必须是 'development' 或 'production'，当前值: '{}'".format(config.get("environment")))
 
         # 创建配置对象
         try:
@@ -112,19 +131,44 @@ class LogConfig(ValidatedConfig):
     @classmethod
     def validate(cls, config):
         # type: (Dict[str, Any]) -> 'LogConfig'
-        """验证日志配置"""
-        assert config is not None, "日志配置不能为空"
-        assert isinstance(config, dict), "日志配置必须为字典"
-        assert len(config) > 0, "日志配置不能为空"
-        assert config.get("version") is not None, "日志版本不能为空"
-        assert config.get("version") == 1, "日志版本必须为1"
-        assert config.get("level") is not None, "日志级别不能为空"
-        assert config.get("level") in ["DEBUG", "INFO", "WARNING", "ERROR",
-                                       "CRITICAL"], "日志级别必须是DEBUG, INFO, WARNING, ERROR, CRITICAL之一"
-        assert config.get("formatters") is not None, "日志格式器不能为空"
-        assert isinstance(config.get("formatters"), dict), "日志格式器必须为字典"
-        assert config.get("handlers") is not None, "日志处理器不能为空"
-        assert isinstance(config.get("handlers"), dict), "日志处理器必须为字典"
+        """
+        验证日志配置
+        
+        Args:
+            config: 日志配置字典
+            
+        Returns:
+            LogConfig: 验证后的配置对象
+            
+        Raises:
+            ValueError: 配置验证失败时抛出
+        """
+        if config is None:
+            raise ValueError("日志配置不能为空")
+        if not isinstance(config, dict):
+            raise ValueError("日志配置必须为字典，当前类型: {}".format(type(config).__name__))
+        if len(config) == 0:
+            raise ValueError("日志配置不能为空字典")
+        if config.get("version") is None:
+            raise ValueError("日志配置中缺少必需字段: version")
+        if config.get("version") != 1:
+            raise ValueError("日志版本必须为 1，当前值: {}".format(config.get("version")))
+        if config.get("level") is None:
+            raise ValueError("日志配置中缺少必需字段: level")
+
+        valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if config.get("level") not in valid_levels:
+            raise ValueError("日志级别必须是 {} 之一，当前值: {}".format(
+                ", ".join(valid_levels), config.get("level")))
+
+        if config.get("formatters") is None:
+            raise ValueError("日志配置中缺少必需字段: formatters")
+        if not isinstance(config.get("formatters"), dict):
+            raise ValueError("formatters 必须为字典，当前类型: {}".format(type(config.get("formatters")).__name__))
+        if config.get("handlers") is None:
+            raise ValueError("日志配置中缺少必需字段: handlers")
+        if not isinstance(config.get("handlers"), dict):
+            raise ValueError("handlers 必须为字典，当前类型: {}".format(type(config.get("handlers")).__name__))
 
         # 创建配置对象
         try:
@@ -138,9 +182,12 @@ class LogConfig(ValidatedConfig):
 class OutputConfig(ValidatedConfig):
     """输出控制器配置"""
 
-    def __init__(self, buffer_size=2000, flush_interval=2.0, csv_delimiter=",", include_header=True, **kwargs):
+    def __init__(self, buffer_size=5000, batch_size=1000, large_batch_threshold=500, flush_interval=2.0, output_thread_sleep=0.1, csv_delimiter=",", include_header=True, **kwargs):
         self.buffer_size = buffer_size
-        self.flush_interval = flush_interval  # 秒
+        self.batch_size = batch_size
+        self.large_batch_threshold = large_batch_threshold
+        self.flush_interval = flush_interval
+        self.output_thread_sleep = output_thread_sleep
         self.csv_delimiter = csv_delimiter
         self.include_header = include_header
 
@@ -151,18 +198,68 @@ class OutputConfig(ValidatedConfig):
     @classmethod
     def validate(cls, config):
         # type: (Dict[str, Any]) -> 'OutputConfig'
-        """验证输出配置"""
-        assert config is not None, "输出配置不能为空"
-        assert isinstance(config, dict), "输出配置必须为字典"
-        assert len(config) > 0, "输出配置不能为空"
-        assert config.get("buffer_size") is not None, "缓冲区大小不能为空"
-        assert isinstance(config.get("buffer_size"), int), "缓冲区大小必须为整数"
-        assert config.get("buffer_size") > 0, "缓冲区大小必须大于0"
-        assert config.get("flush_interval") is not None, "刷新间隔不能为空"
-        assert isinstance(config.get("flush_interval"), float), "刷新间隔必须为浮点数"
-        assert config.get("flush_interval") > 0, "刷新间隔必须大于0"
-        assert config.get("csv_delimiter") is not None, "CSV分隔符不能为空"
-        assert len(config.get("csv_delimiter")) == 1, "CSV分隔符必须为单字符"
+        """
+        验证输出配置
+        
+        Args:
+            config: 输出配置字典
+            
+        Returns:
+            OutputConfig: 验证后的配置对象
+            
+        Raises:
+            ValueError: 配置验证失败时抛出
+        """
+        if config is None:
+            raise ValueError("输出配置不能为空。请在配置文件中添加'output'节")
+        if not isinstance(config, dict):
+            raise ValueError("输出配置必须为字典类型，当前类型: {}。请检查YAML格式".format(type(config).__name__))
+        if len(config) == 0:
+            raise ValueError("输出配置不能为空字典。请至少提供buffer_size、flush_interval和csv_delimiter字段")
+        if config.get("buffer_size") is None:
+            raise ValueError("输出配置中缺少必需字段: buffer_size。示例: buffer_size: 2000")
+        if not isinstance(config.get("buffer_size"), int):
+            raise ValueError("buffer_size 必须为整数类型，当前类型: {}。示例: buffer_size: 2000".format(
+                type(config.get("buffer_size")).__name__))
+        if config.get("buffer_size") <= 0:
+            raise ValueError("buffer_size 必须大于 0，当前值: {}。建议值: 1000-5000".format(config.get("buffer_size")))
+        if config.get("batch_size") is None:
+            raise ValueError("输出配置中缺少必需字段: batch_size。示例: batch_size: 1000")
+        if not isinstance(config.get("batch_size"), int):
+            raise ValueError("batch_size 必须为整数类型，当前类型: {}。示例: batch_size: 1000".format(
+                type(config.get("batch_size")).__name__))
+        if config.get("batch_size") <= 0:
+            raise ValueError("batch_size 必须大于 0，当前值: {}。建议值: 500-2000".format(
+                config.get("batch_size")))
+        if config.get("large_batch_threshold") is None:
+            raise ValueError("输出配置中缺少必需字段: large_batch_threshold。示例: large_batch_threshold: 500")
+        if not isinstance(config.get("large_batch_threshold"), int):
+            raise ValueError("large_batch_threshold 必须为整数类型，当前类型: {}。示例: large_batch_threshold: 500".format(
+                type(config.get("large_batch_threshold")).__name__))
+        if config.get("large_batch_threshold") <= 0:
+            raise ValueError("large_batch_threshold 必须大于 0，当前值: {}。建议值: 10-50".format(
+                config.get("large_batch_threshold")))
+        if config.get("flush_interval") is None:
+            raise ValueError("输出配置中缺少必需字段: flush_interval。示例: flush_interval: 2.0")
+        if not isinstance(config.get("flush_interval"), (int, float)):
+            raise ValueError("flush_interval 必须为数字类型，当前类型: {}。示例: flush_interval: 2.0".format(
+                type(config.get("flush_interval")).__name__))
+        if config.get("flush_interval") <= 0:
+            raise ValueError(
+                "flush_interval 必须大于 0，当前值: {}。建议值: 1.0-10.0秒".format(config.get("flush_interval")))
+        if config.get("output_thread_sleep") is None:
+            raise ValueError("输出配置中缺少必需字段: output_thread_sleep。示例: output_thread_sleep: 0.1")
+        if not isinstance(config.get("output_thread_sleep"), (int, float)):
+            raise ValueError("output_thread_sleep 必须为数字类型，当前类型: {}。示例: output_thread_sleep: 0.1".format(
+                type(config.get("output_thread_sleep")).__name__))
+        if config.get("output_thread_sleep") <= 0:
+            raise ValueError("output_thread_sleep 必须大于 0，当前值: {}。建议值: 0.1-1.0秒".format(
+                config.get("output_thread_sleep")))
+        if config.get("csv_delimiter") is None:
+            raise ValueError("输出配置中缺少必需字段: csv_delimiter。示例: csv_delimiter: ','")
+        if len(config.get("csv_delimiter")) != 1:
+            raise ValueError(
+                "csv_delimiter 必须为单字符，当前长度: {}。示例: ',' 或 '\\t'".format(len(config.get("csv_delimiter"))))
 
         # 创建配置对象
         try:
@@ -216,10 +313,24 @@ class MonitorsConfig(ValidatedConfig):
     @classmethod
     def validate(cls, config):
         # type: (Dict[str, Any]) -> 'MonitorsConfig'
-        """验证监控配置 - 动态验证所有监控器"""
-        assert config is not None, "监控配置不能为空"
-        assert isinstance(config, dict), "监控配置必须为字典"
-        assert len(config) > 0, "监控配置不能为空"
+        """
+        验证监控配置 - 动态验证所有监控器
+        
+        Args:
+            config: 监控配置字典
+            
+        Returns:
+            MonitorsConfig: 验证后的配置对象
+            
+        Raises:
+            ValueError: 配置验证失败时抛出
+        """
+        if config is None:
+            raise ValueError("监控配置不能为空。请在配置文件中添加'monitors'节")
+        if not isinstance(config, dict):
+            raise ValueError("监控配置必须为字典类型，当前类型: {}。请检查YAML格式".format(type(config).__name__))
+        if len(config) == 0:
+            raise ValueError("监控配置不能为空字典。请至少配置一个监控器（如exec、syscall等）")
 
         # 第1步：创建MonitorsConfig对象（会自动发现和合并配置）
         try:

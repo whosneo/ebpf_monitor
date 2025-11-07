@@ -3,281 +3,206 @@
 """
 页面错误监控器
 
-监控系统页面错误事件，分析内存访问模式和性能瓶颈。
-支持主要/次要页面错误监控、延迟分析和内存压力评估。
+负责加载和管理页面错误监控eBPF程序，统计页面错误频率和模式。
+采用统计模式，在内核态累积页面错误次数，定期批量输出，避免高频事件导致的数据丢失。
+
+统计维度：
+- (进程名, 错误类型, CPU) -> 次数
+
+支持的错误类型（通过error_code检测）：
+- MAJOR (0x2): 页面不在内存，需要从磁盘加载
+- MINOR (0x1): 页面在内存，权限问题
+- WRITE (0x4): 写访问导致的错误
+- USER (0x8): 用户空间错误
+
+支持的分析场景：
+- 识别内存密集型进程和页面错误模式
+- 分析MAJOR页面错误（涉及磁盘I/O）的来源
+- 分析页面错误在各CPU和NUMA节点上的分布
+- 区分用户空间和内核空间的页面错误
 """
 
-import ctypes as ct
 # 兼容性导入
 try:
     from typing import Dict, List, Any
 except ImportError:
     from ..utils.py2_compat import Dict, List, Any
 
-from .base import BaseEvent, BaseMonitor
+# 本地模块导入
+from .base import BaseMonitor
 from ..utils.data_processor import DataProcessor
 from ..utils.decorators import register_monitor
 
 
-class PageFaultEvent(BaseEvent):
-    """页面错误事件"""
-    _fields_ = [
-        ("pid", ct.c_uint32),          # 进程ID
-        ("tid", ct.c_uint32),          # 线程ID
-        ("comm", ct.c_char * 16),      # 进程名
-        ("address", ct.c_uint64),      # 内存地址
-        ("fault_type", ct.c_uint32),   # 错误类型
-        ("cpu", ct.c_uint32),          # CPU编号
-    ]
+# ==================== PageFault数据处理工具类 ====================
 
-    @property
-    def fault_type_str(self):
-        # type: () -> str
-        """获取错误类型字符串"""
+class PageFaultDataUtils(object):
+    """
+    PageFault数据处理工具类
+    
+    提供页面错误类型判断和格式化功能。
+    仅供PageFaultMonitor内部使用。
+    """
+
+    # 页面错误类型常量（与C代码保持一致）
+    FAULT_TYPE_MINOR = 0x1  # 次要页面错误（页面在内存，权限问题）
+    FAULT_TYPE_MAJOR = 0x2  # 主要页面错误（页面不在内存，需要加载）
+    FAULT_TYPE_WRITE = 0x4  # 写错误（写访问导致的错误）
+    FAULT_TYPE_USER = 0x8  # 用户空间错误（用户模式访问）
+
+    @staticmethod
+    def fault_type_to_str(fault_type):
+        # type: (int) -> str
+        """获取错误类型字符串（显式显示所有维度）"""
         types = []
-        if self.fault_type & PageFaultMonitor.FAULT_TYPE_MINOR:
+
+        # 维度1：MAJOR vs MINOR
+        if fault_type & PageFaultDataUtils.FAULT_TYPE_MINOR:
             types.append("MINOR")
-        if self.fault_type & PageFaultMonitor.FAULT_TYPE_MAJOR:
+        elif fault_type & PageFaultDataUtils.FAULT_TYPE_MAJOR:
             types.append("MAJOR")
-        if self.fault_type & PageFaultMonitor.FAULT_TYPE_WRITE:
+        else:
+            types.append("UNKNOWN")
+
+        # 维度2：WRITE vs READ（显式）
+        if fault_type & PageFaultDataUtils.FAULT_TYPE_WRITE:
             types.append("WRITE")
-        if self.fault_type & PageFaultMonitor.FAULT_TYPE_USER:
+        else:
+            types.append("READ")
+
+        # 维度3：USER vs KERNEL（显式）
+        if fault_type & PageFaultDataUtils.FAULT_TYPE_USER:
             types.append("USER")
-        if self.fault_type & PageFaultMonitor.FAULT_TYPE_SHARED:
-            types.append("SHARED")
-        if self.fault_type & PageFaultMonitor.FAULT_TYPE_SWAP:
-            types.append("SWAP")
-        return "|".join(types) if types else "UNKNOWN"
+        else:
+            types.append("KERNEL")
 
-    @property
-    def is_major_fault(self):
-        # type: () -> bool
+        return "|".join(types)
+
+    @staticmethod
+    def is_major_fault(fault_type):
+        # type: (int) -> bool
         """是否为主要页面错误"""
-        return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_MAJOR)
+        return bool(fault_type & PageFaultDataUtils.FAULT_TYPE_MAJOR)
 
-    @property
-    def is_minor_fault(self):
-        # type: () -> bool
+    @staticmethod
+    def is_minor_fault(fault_type):
+        # type: (int) -> bool
         """是否为次要页面错误"""
-        return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_MINOR)
+        return bool(fault_type & PageFaultDataUtils.FAULT_TYPE_MINOR)
 
-    @property
-    def is_write_fault(self):
-        # type: () -> bool
+    @staticmethod
+    def is_write_fault(fault_type):
+        # type: (int) -> bool
         """是否为写错误"""
-        return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_WRITE)
+        return bool(fault_type & PageFaultDataUtils.FAULT_TYPE_WRITE)
 
-    @property
-    def is_user_fault(self):
-        # type: () -> bool
+    @staticmethod
+    def is_read_fault(fault_type):
+        # type: (int) -> bool
+        """是否为读错误（即非写错误）"""
+        return not PageFaultDataUtils.is_write_fault(fault_type)
+
+    @staticmethod
+    def is_user_fault(fault_type):
+        # type: (int) -> bool
         """是否为用户空间错误"""
-        return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_USER)
+        return bool(fault_type & PageFaultDataUtils.FAULT_TYPE_USER)
 
-    @property
-    def is_shared_fault(self):
-        # type: () -> bool
-        """是否为共享内存错误"""
-        return bool(self.fault_type & PageFaultMonitor.FAULT_TYPE_SHARED)
+    @staticmethod
+    def is_kernel_fault(fault_type):
+        # type: (int) -> bool
+        """是否为内核空间错误（即非用户空间）"""
+        return not PageFaultDataUtils.is_user_fault(fault_type)
 
-    @property
-    def address_hex(self):
-        # type: () -> str
-        """获取格式化的内存地址"""
-        return "0x{:x}".format(self.address)
+
+# ==================== PageFault监控器 ====================
 
 
 @register_monitor("page_fault")
 class PageFaultMonitor(BaseMonitor):
-    """页面错误监控器"""
-    EVENT_TYPE = PageFaultEvent  # type: type
-
+    """页面错误监控器 - 专注于监控流程管理"""
     REQUIRED_TRACEPOINTS = [  # type: List[str]
-        'exceptions:page_fault_user',
-        'exceptions:page_fault_kernel'
+        "exceptions:page_fault_user",
+        "exceptions:page_fault_kernel"
     ]
-
-    # 页面错误类型常量（与C代码保持一致）
-    FAULT_TYPE_MINOR = 0x1
-    FAULT_TYPE_MAJOR = 0x2
-    FAULT_TYPE_WRITE = 0x4
-    FAULT_TYPE_USER = 0x8
-    FAULT_TYPE_SHARED = 0x10
-    FAULT_TYPE_SWAP = 0x8000
-
-    # 内存压力级别常量
-    PRESSURE_NONE = 0
-    PRESSURE_LOW = 1
-    PRESSURE_MEDIUM = 2
-    PRESSURE_HIGH = 3
-
-    @classmethod
-    def get_default_config(cls):
-        # type: () -> Dict[str, Any]
-        """获取页面错误监控器默认配置"""
-        return {
-            "enabled": True,
-            "monitor_major_faults": True,          # 是否监控主要页面错误
-            "monitor_minor_faults": True,          # 是否监控次要页面错误
-            "monitor_write_faults": True,          # 是否监控写错误
-            "monitor_user_faults": True,           # 是否监控用户空间错误
-            "monitor_kernel_faults": False         # 是否监控内核空间错误
-        }
-
-    @classmethod
-    def validate_monitor_config(cls, config):
-        # type: (Dict[str, Any]) -> None
-        """验证页面错误监控器配置"""
-        # 验证监控开关配置
-        assert config.get("monitor_major_faults") is not None, "monitor_major_faults不能为空"
-        assert isinstance(config.get("monitor_major_faults"), bool), "monitor_major_faults必须为布尔值"
-
-        assert config.get("monitor_minor_faults") is not None, "monitor_minor_faults不能为空"
-        assert isinstance(config.get("monitor_minor_faults"), bool), "monitor_minor_faults必须为布尔值"
-
-        assert config.get("monitor_write_faults") is not None, "monitor_write_faults不能为空"
-        assert isinstance(config.get("monitor_write_faults"), bool), "monitor_write_faults必须为布尔值"
-
-        assert config.get("monitor_user_faults") is not None, "monitor_user_faults不能为空"
-        assert isinstance(config.get("monitor_user_faults"), bool), "monitor_user_faults必须为布尔值"
-
-        assert config.get("monitor_kernel_faults") is not None, "monitor_kernel_faults不能为空"
-        assert isinstance(config.get("monitor_kernel_faults"), bool), "monitor_kernel_faults必须为布尔值"
 
     def _initialize(self, config):
         # type: (Dict[str, Any]) -> None
         """初始化页面错误监控器"""
-        self.enabled = config.get("enabled")
-        
-        # 监控开关配置
-        self.monitor_major_faults = config.get("monitor_major_faults")
-        self.monitor_minor_faults = config.get("monitor_minor_faults")
-        self.monitor_write_faults = config.get("monitor_write_faults")
-        self.monitor_user_faults = config.get("monitor_user_faults")
-        self.monitor_kernel_faults = config.get("monitor_kernel_faults")
+        # NUMA节点映射
+        self.cpu_to_numa = {}  # type: Dict[int, int]
+        self._init_numa_mapping()
 
-    def _should_handle_event(self, event):
-        # type: (PageFaultEvent) -> bool
-        """检查是否应该处理事件"""
-        # 根据错误类型过滤
-        if event.is_major_fault and not self.monitor_major_faults:
-            return False
-        if event.is_minor_fault and not self.monitor_minor_faults:
-            return False
-        if event.is_write_fault and not self.monitor_write_faults:
-            return False
-        if event.is_user_fault and not self.monitor_user_faults:
-            return False
-        # 内核错误过滤（基于是否为用户错误来判断）
-        if not event.is_user_fault and not self.monitor_kernel_faults:
-            return False
+    def _init_numa_mapping(self):
+        """初始化CPU到NUMA节点的映射"""
+        import os
 
-        return True
+        if not os.path.exists('/sys/devices/system/node'):
+            self.logger.debug("系统不支持NUMA或未检测到NUMA节点")
+            return
 
-    def _is_high_latency_event(self, event):
-        # type: (PageFaultEvent) -> bool
-        """判断是否为高延迟事件"""
-        return event.duration_us >= self.high_latency_threshold_us
+        try:
+            for node_dir in os.listdir('/sys/devices/system/node'):
+                if node_dir.startswith('node'):
+                    node_id = int(node_dir[4:])
+                    cpulist_file = '/sys/devices/system/node/{}/cpulist'.format(node_dir)
+                    if os.path.exists(cpulist_file):
+                        with open(cpulist_file) as f:
+                            cpulist = f.read().strip()
+                            for cpu in self._parse_cpulist(cpulist):
+                                self.cpu_to_numa[cpu] = node_id
+
+            if self.cpu_to_numa:
+                self.logger.info("检测到NUMA系统，已加载CPU到NUMA节点映射")
+        except Exception as e:
+            self.logger.warning("加载NUMA映射失败: {}".format(e))
+
+    def _parse_cpulist(self, cpulist):
+        """解析CPU列表字符串，如 '0-3,8-11' """
+        cpus = []
+        for part in cpulist.split(','):
+            if '-' in part:
+                start, end = map(int, part.split('-'))
+                cpus.extend(range(start, end + 1))
+            else:
+                cpus.append(int(part))
+        return cpus
 
     # ==================== 格式化方法实现 ====================
 
-    def get_csv_header(self):
+    def monitor_csv_header(self):
         # type: () -> List[str]
         """获取CSV头部字段"""
         return [
-            'timestamp', 'time_str', 'pid', 'tid', 'comm', 
-            'address', 'address_hex', 'fault_type', 'fault_type_str', 
-            'cpu', 'is_major_fault', 'is_minor_fault', 'is_write_fault', 'is_user_fault'
+            "comm", "fault_type", "fault_type_str",
+            "cpu", "numa_node", "count"
         ]
 
-    def format_for_csv(self, event_data):
-        # type: (PageFaultEvent) -> Dict[str, Any]
+    def monitor_csv_data(self, data):
+        # type: (Dict[str, Any]) -> Dict[str, Any]
         """将事件数据格式化为CSV行数据"""
-        timestamp = self._convert_timestamp(event_data)
-        time_str = DataProcessor.format_timestamp(timestamp)
-        
-        # 处理字节字符串
-        comm = DataProcessor.decode_bytes(event_data.comm)
-        
-        values = [
-            timestamp, time_str, event_data.pid, event_data.tid, comm,
-            event_data.address, event_data.address_hex, event_data.fault_type, event_data.fault_type_str,
-            event_data.cpu, event_data.is_major_fault, event_data.is_minor_fault, 
-            event_data.is_write_fault, event_data.is_user_fault
-        ]
-        
-        return dict(zip(self.get_csv_header(), values))
+        return {
+            "comm": data["comm"],
+            "fault_type": data["fault_type"],
+            "fault_type_str": PageFaultDataUtils.fault_type_to_str(data["fault_type"]),
+            "cpu": data["cpu"],
+            "numa_node": self.cpu_to_numa.get(data["cpu"], -1),
+            "count": data["count"]
+        }
 
-    def get_console_header(self):
+    def monitor_console_header(self):
         # type: () -> str
         """获取控制台输出的表头"""
-        return "{:<22} {:<8} {:<8} {:<16} {:<3} {:<18} {:<12}".format(
-            'TIME', 'PID', 'TID', 'COMM', 'CPU', 'ADDRESS', 'FAULT_TYPE')
+        return "{:<16} {:<22} {:<3} {:<4} {:<10}".format(
+            "COMM", "FAULT_TYPE", "CPU", "NUMA", "COUNT")
 
-    def format_for_console(self, event_data):
-        # type: (PageFaultEvent) -> str
+    def monitor_console_data(self, data):
+        # type: (Dict[str, Any]) -> str
         """将事件数据格式化为控制台输出"""
-        timestamp = self._convert_timestamp(event_data)
-        time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
-
-        # 处理字节字符串
-        comm = DataProcessor.decode_bytes(event_data.comm)
-        
-        # 简化的错误类型显示
-        if event_data.is_major_fault:
-            fault_type_display = "MAJOR"
-        elif event_data.is_minor_fault:
-            fault_type_display = "MINOR"
-        else:
-            fault_type_display = "UNKNOWN"
-            
-        if event_data.is_write_fault:
-            fault_type_display += "|WRITE"
-        if event_data.is_user_fault:
-            fault_type_display += "|USER"
-
-        return "{:<22} {:<8} {:<8} {:<16} {:<3} {:<18} {:<12}".format(
-            time_str, event_data.pid, event_data.tid, comm, event_data.cpu, 
-            event_data.address_hex, fault_type_display)
-
-
-if __name__ == '__main__':
-    """测试模式"""
-    import sys
-    import time
-    from ..utils.application_context import ApplicationContext
-
-    context = ApplicationContext()
-
-    logger = context.get_logger("PageFaultMonitor")
-    logger.info("页面错误监控测试模式")
-
-    monitor = PageFaultMonitor(context, PageFaultMonitor.get_default_config())
-
-    output_controller = context.output_controller
-    output_controller.register_monitor("page_fault", monitor)
-
-    if not monitor.load_ebpf_program():
-        logger.error("eBPF程序加载失败")
-        sys.exit(1)
-
-    output_controller.start()
-
-    if not monitor.run():
-        logger.error("页面错误监控启动失败")
-        sys.exit(1)
-
-    logger.info("页面错误监控已启动")
-    logger.info("按 Ctrl+C 停止监控")
-
-    try:
-        while monitor.is_running():
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("")
-        logger.info("用户中断，正在停止监控...")
-    finally:
-        monitor.stop()
-        output_controller.stop()
-        output_controller.unregister_monitor("page_fault")
-        monitor.cleanup()
-        output_controller.cleanup()
+        return "{:<16} {:<22} {:<3} {:<4} {:<10}".format(
+            data["comm"],
+            PageFaultDataUtils.fault_type_to_str(data["fault_type"]),
+            data["cpu"],
+            self.cpu_to_numa.get(data["cpu"], -1),
+            data["count"]
+        )

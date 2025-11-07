@@ -1,59 +1,61 @@
-/* eBPF page_fault_monitor 程序 - 监控系统页面错误事件
+/* eBPF page_fault_monitor 程序 - 基于统计模式的页面错误监控
  * 
- * 采用纯Tracepoint机制的优势：
- * 1. 兼容性：使用exceptions tracepoint，避免内核符号依赖问题
- * 2. 稳定性：tracepoint是内核提供的稳定ABI
- * 3. 简洁性：无需复杂的状态管理和时间测量
- * 4. 可靠性：避免kprobe可能的兼容性问题
- * 5. 性能：最小的系统开销
+ * 设计特点：
+ * 1. 统计模式：在内核态按多维度累积页面错误次数，避免高频事件导致的数据丢失
+ * 2. 定期输出：Python端定时读取统计数据并输出（默认5秒周期）
+ * 3. 统计维度：(进程名, 错误类型, CPU) -> 次数
+ * 4. NUMA支持：Python端提供CPU到NUMA节点的映射分析
  * 
  * 使用的Tracepoint：
  * - exceptions:page_fault_user: 监控用户空间页面错误
  * - exceptions:page_fault_kernel: 监控内核空间页面错误
  * 
- * 注意：此实现专注于页面错误的发生模式分析，不测量处理时间
+ * 统计维度说明：
+ * - comm: 进程名（识别内存密集型进程）
+ * - fault_type: 错误类型位掩码（MAJOR/MINOR/WRITE/USER，通过error_code解析）
+ * - cpu: CPU编号（分析CPU和NUMA节点分布）
+ * 
+ * 错误类型检测能力：
+ * ✅ MAJOR (0x2): 页面不在内存，需要从磁盘加载（error_code bit 0 = 0）
+ * ✅ MINOR (0x1): 页面在内存，权限问题（error_code bit 0 = 1）
+ * ✅ WRITE (0x4): 写访问导致的错误（error_code bit 1 = 1）
+ * ✅ USER (0x8): 用户空间错误（error_code bit 2 = 1）
+ * ❌ SHARED: 无法通过error_code检测，需要VMA查询
+ * ❌ SWAP: 无法通过error_code检测，需要页表查询
+ * 
+ * 性能优化：
+ * - 使用原子操作(__sync_fetch_and_add)保证并发安全
+ * - 兼容内核3.10+（使用lookup+update模式）
+ * - Hash Map大小：page_fault_stats=10240（约240KB内存）
  */
 
 #include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
 
-/* 页面错误类型定义 - 与Python代码保持一致 */
-#define FAULT_TYPE_MINOR     0x1      // 次要页面错误
-#define FAULT_TYPE_MAJOR     0x2      // 主要页面错误
-#define FAULT_TYPE_WRITE     0x4      // 写错误
-#define FAULT_TYPE_USER      0x8      // 用户空间错误
-#define FAULT_TYPE_SHARED    0x10     // 共享内存错误
-#define FAULT_TYPE_SWAP      0x8000   // 交换页面错误
+/* 页面错误类型定义 - 与Python代码保持一致
+ * 注意：只能通过error_code检测以下四种类型
+ */
+#define FAULT_TYPE_MINOR     0x1      // 次要页面错误（页面在内存，权限问题）
+#define FAULT_TYPE_MAJOR     0x2      // 主要页面错误（页面不在内存，需要加载）
+#define FAULT_TYPE_WRITE     0x4      // 写错误（写访问导致的错误）
+#define FAULT_TYPE_USER      0x8      // 用户空间错误（用户模式访问）
 
-/* 页面错误事件数据结构 */
-struct page_fault_event {
-    u64 timestamp;                 // 时间戳 (纳秒)
-    u32 pid;                       // 进程ID
-    u32 tid;                       // 线程ID
-    char comm[TASK_COMM_LEN];      // 进程名
-    u64 address;                   // 内存地址
-    u32 fault_type;                // 错误类型
-    u32 cpu;                       // CPU编号
+/* 统计Key：(进程名, 错误类型, CPU)
+ * 注意：comm[16] + u32 + u32虽然没有填充，但为了一致性也显式清零
+ */
+struct stats_key_t {
+    char comm[TASK_COMM_LEN];  // 进程名 (16字节)
+    u32 fault_type;            // 错误类型位掩码
+    u32 cpu;                   // CPU编号
 };
 
-/* BPF映射和输出管道 */
-BPF_PERF_OUTPUT(page_fault_events);                 // 事件输出管道
-BPF_HASH(target_pids, u32, u8, 1024);               // 目标进程PID映射
-BPF_HASH(target_uids, u32, u8, 1024);               // 目标用户ID映射
+/* 统计Value */
+struct stats_value_t {
+    u64 count;  // 页面错误次数
+};
 
-/* 辅助函数：检查是否为目标进程 */
-static inline bool is_target_process(u32 pid) {
-    // u8 *val = target_pids.lookup(&pid);
-    // return val != 0;
-    return true;  // 页面错误监控默认监控所有进程
-}
-
-/* 辅助函数：检查是否为目标用户 */
-static inline bool is_target_user(u32 uid) {
-    // u8 *val = target_uids.lookup(&uid);
-    // return val != 0;
-    return true;  // 页面错误监控默认监控所有用户
-}
+/* BPF映射 */
+BPF_HASH(page_fault_stats, struct stats_key_t, struct stats_value_t, 10240);  // 页面错误统计
 
 /* 辅助函数：确定页面错误类型 */
 static inline u32 determine_fault_type(unsigned long error_code, bool is_user_fault) {
@@ -86,18 +88,24 @@ static inline u32 determine_fault_type(unsigned long error_code, bool is_user_fa
     return fault_type;
 }
 
-/* 辅助函数：初始化基础事件数据 */
-static inline void init_page_fault_event(struct page_fault_event *event, bool is_user_fault, unsigned long address, unsigned long error_code) {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+/* 统计更新函数：更新页面错误统计 */
+static inline void update_page_fault_stats(u32 fault_type, u32 cpu) {
+    struct stats_key_t key = {};
+    __builtin_memset(&key, 0, sizeof(key));  // 显式清零，确保一致性
+    bpf_get_current_comm(&key.comm, sizeof(key.comm));
+    key.fault_type = fault_type;
+    key.cpu = cpu;
     
-    event->timestamp = bpf_ktime_get_ns();
-    event->pid = pid_tgid >> 32;
-    event->tid = pid_tgid & 0xffffffff;
-    event->cpu = bpf_get_smp_processor_id();
-    bpf_get_current_comm(&event->comm, sizeof(event->comm));
-    
-    event->address = address;
-    event->fault_type = determine_fault_type(error_code, is_user_fault);
+    // 兼容3.10内核：使用lookup + update模式
+    struct stats_value_t *val = page_fault_stats.lookup(&key);
+    if (val) {
+        // 已存在，原子递增
+        __sync_fetch_and_add(&val->count, 1);
+    } else {
+        // 不存在，创建新条目
+        struct stats_value_t new_val = {.count = 1};
+        page_fault_stats.update(&key, &new_val);
+    }
 }
 
 // # cat /sys/kernel/debug/tracing/events/exceptions/page_fault_user/format
@@ -117,25 +125,12 @@ static inline void init_page_fault_event(struct page_fault_event *event, bool is
 
 // Tracepoint: exceptions:page_fault_user - 监控用户空间页面错误
 TRACEPOINT_PROBE(exceptions, page_fault_user) {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 pid = pid_tgid >> 32;
+    // 确定错误类型并更新统计
+    u32 fault_type = determine_fault_type(args->error_code, true);
+    u32 cpu = bpf_get_smp_processor_id();
     
-    // 进程过滤
-    if (!is_target_process(pid)) {
-        return 0;
-    }
+    update_page_fault_stats(fault_type, cpu);
     
-    // 用户过滤
-    u32 uid = bpf_get_current_uid_gid() & 0xffffffff;
-    if (!is_target_user(uid)) {
-        return 0;
-    }
-    
-    // 构造并发送事件
-    struct page_fault_event event = {};
-    init_page_fault_event(&event, true, args->address, args->error_code);
-    
-    page_fault_events.perf_submit(args, &event, sizeof(event));
     return 0;
 }
 
@@ -156,27 +151,11 @@ TRACEPOINT_PROBE(exceptions, page_fault_user) {
 
 // Tracepoint: exceptions:page_fault_kernel - 监控内核空间页面错误
 TRACEPOINT_PROBE(exceptions, page_fault_kernel) {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 pid = pid_tgid >> 32;
+    // 确定错误类型并更新统计
+    u32 fault_type = determine_fault_type(args->error_code, false);
+    u32 cpu = bpf_get_smp_processor_id();
     
-    // 进程过滤
-    if (!is_target_process(pid)) {
-        return 0;
-    }
+    update_page_fault_stats(fault_type, cpu);
     
-    // 构造并发送事件
-    struct page_fault_event event = {};
-    init_page_fault_event(&event, false, args->address, args->error_code);
-    
-    page_fault_events.perf_submit(args, &event, sizeof(event));
     return 0;
 }
-
-/* 
- * 注意事项：
- * 1. 这个eBPF程序需要root权限运行
- * 2. 完全基于tracepoint实现，避免kprobe兼容性问题
- * 3. 数据结构已简化，移除了无法获取的字段
- * 4. 专注于页面错误的发生模式和频率分析
- * 5. 提供最大的系统兼容性和稳定性
- */

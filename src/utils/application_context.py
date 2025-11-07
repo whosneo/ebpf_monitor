@@ -8,7 +8,7 @@
 """
 
 import logging
-import threading
+
 # 兼容性导入
 try:
     from typing import Dict, Any, Optional, List, TYPE_CHECKING
@@ -23,6 +23,7 @@ from .output_controller import OutputController
 if TYPE_CHECKING:
     from .capability_checker import CapabilityChecker
     from .monitor_registry import MonitorRegistry
+    from .monitor_factory import MonitorFactory
     from ..ebpf_monitor import eBPFMonitor
 
 
@@ -42,22 +43,30 @@ class ApplicationContext:
         Args:
             config_file: 配置文件路径
         """
-        # 分层锁架构：替换单一全局锁为细粒度锁
-        self.component_registry_lock = threading.RLock()  # 组件注册/注销锁
-        self.component_access_lock = threading.RLock()  # 组件访问锁
+        # 组件缓存字典
         self.components = {}  # type: Dict[str, Any]
 
-        # 初始化核心组件（保留单例的组件）
+        # 按依赖顺序创建核心组件
+        # 1. ConfigManager (无依赖)
         self.config_manager = ConfigManager(config_file)
-        self.log_manager = LogManager()
-        self.output_controller = OutputController()
-        self.daemon_manager = DaemonManager()
+
+        # 2. LogManager (依赖ConfigManager, 保持单例)
+        self.log_manager = LogManager(self.config_manager)
+
+        # 3. OutputController (依赖ConfigManager和LogManager)
+        self.output_controller = OutputController(
+            self.config_manager,
+            self.log_manager
+        )
+
+        # 4. DaemonManager (依赖LogManager)
+        self.daemon_manager = DaemonManager(self.log_manager)
 
         # 获取基础配置
         self.logger = self.log_manager.get_logger(self)
         self.base_dir = self.config_manager.get_base_dir()
 
-        self.logger.info("应用上下文初始化完成")
+        self.logger.debug("应用上下文初始化完成")
 
     def get_logger(self, obj=None):
         # type: (Any) -> logging.Logger
@@ -75,7 +84,7 @@ class ApplicationContext:
     def get_component(self, name):
         # type: (str) -> Optional[Any]
         """
-        获取注册的组件 - 使用组件访问锁
+        获取注册的组件
         
         Args:
             name: 组件名称
@@ -83,8 +92,7 @@ class ApplicationContext:
         Returns:
             Optional[Any]: 组件实例，如果不存在返回None
         """
-        with self.component_access_lock:
-            return self.components.get(name)
+        return self.components.get(name)
 
     def get_capability_checker(self):
         # type: () -> 'CapabilityChecker'
@@ -117,41 +125,54 @@ class ApplicationContext:
             return registry
         return self.components['monitor_registry']
 
-    def get_ebpf_monitor(self, selected_monitors=None):
-        # type: (List[str]) -> 'eBPFMonitor'
+    def get_monitor_factory(self):
+        # type: () -> 'MonitorFactory'
         """
-        获取eBPF监控器实例（缓存机制，避免重复创建）
+        获取监控器工厂实例（缓存机制，避免重复创建）
+        
+        Returns:
+            MonitorFactory: 监控器工厂实例
+        """
+        if 'monitor_factory' not in self.components:
+            from .monitor_factory import MonitorFactory
+            factory = MonitorFactory(context=self)
+            self._register_component('monitor_factory', factory)
+            return factory
+        return self.components['monitor_factory']
+
+    def get_ebpf_monitor(self, selected_monitors=None):
+        # type: (Optional[List[str]]) -> 'eBPFMonitor'
+        """
+        创建新的eBPF监控器实例（不缓存，因为参数可能变化）
         
         Args:
-            selected_monitors: 选定的监控器列表
+            selected_monitors: 选定的监控器列表，None表示使用所有已注册的监控器
             
         Returns:
-            eBPFMonitor: eBPF监控器实例
+            eBPFMonitor: 新创建的eBPF监控器实例
         """
-        if 'ebpf_monitor' not in self.components:
-            from ..ebpf_monitor import eBPFMonitor
-            monitor = eBPFMonitor(context=self, selected_monitors=selected_monitors)
-            self._register_component('ebpf_monitor', monitor)
-            return monitor
-        return self.components['ebpf_monitor']
+        from ..ebpf_monitor import eBPFMonitor
+        monitor = eBPFMonitor(context=self, selected_monitors=selected_monitors)
+        # 注册到组件以便cleanup时可以清理
+        self._register_component('ebpf_monitor', monitor)
+        return monitor
 
     def _register_component(self, name, component):
         # type: (str, Any) -> None
         """
-        注册组件到上下文 - 使用组件注册锁
+        注册组件到上下文
         
         Args:
             name: 组件名称
             component: 组件实例
         """
-        with self.component_registry_lock:
-            self.components[name] = component
-            self.logger.debug("注册组件: {}".format(name))
+        self.components[name] = component
+        self.logger.debug("注册组件: {}".format(name))
 
     def _unregister_component(self, name):
         # type: (str) -> bool
         """
-        注销组件 - 使用组件注册锁
+        注销组件
         
         Args:
             name: 组件名称
@@ -159,67 +180,25 @@ class ApplicationContext:
         Returns:
             bool: 是否成功注销
         """
-        with self.component_registry_lock:
-            if name in self.components:
-                del self.components[name]
-                self.logger.debug("注销组件: {}".format(name))
-                return True
-            return False
+        if name in self.components:
+            del self.components[name]
+            self.logger.debug("注销组件: {}".format(name))
+            return True
+        return False
 
     def cleanup(self):
         # type: () -> None
-        """清理上下文和所有注册的组件 - 使用组件注册锁"""
-        with self.component_registry_lock:
-            self.logger.info("开始清理应用上下文...")
+        """清理上下文和所有注册的组件"""
+        self.logger.info("开始清理应用上下文...")
 
-            # 清理注册的组件
-            for name, component in list(self.components.items()):
-                if hasattr(component, 'cleanup'):
-                    try:
-                        component.cleanup()
-                        self.logger.debug("清理组件: {}".format(name))
-                    except Exception as e:
-                        self.logger.error("清理组件失败 {}: {}".format(name, e))
+        # 清理注册的组件
+        for name, component in list(self.components.items()):
+            if hasattr(component, 'cleanup'):
+                try:
+                    component.cleanup()
+                    self.logger.debug("清理组件: {}".format(name))
+                except Exception as e:
+                    self.logger.error("清理组件失败 {}: {}".format(name, e))
 
-            self.components.clear()
-            self.logger.info("应用上下文清理完成")
-
-    def get_status(self):
-        # type: () -> Dict[str, Any]
-        """
-        获取上下文状态信息 - 使用组件访问锁
-        
-        Returns:
-            Dict[str, Any]: 状态信息
-        """
-        with self.component_access_lock:
-            return {
-                'base_dir': str(self.base_dir),
-                'registered_components': list(self.components.keys()),
-                'config_file': self.config_manager.config_file,
-                'log_level': logging.getLevelName(self.log_manager.level)
-            }
-
-
-if __name__ == "__main__":
-    """测试应用上下文"""
-    print("=== 应用上下文测试 ===")
-
-    context = ApplicationContext()
-
-    # 测试组件创建
-    capability_checker = context.get_capability_checker()
-    monitor_registry = context.get_monitor_registry()
-    ebpf_monitor = context.get_ebpf_monitor()
-
-    print("兼容性检查器: {}".format(capability_checker))
-    print("监控器注册表: {}".format(monitor_registry))
-    print("eBPF监控器: {}".format(ebpf_monitor))
-
-    # 测试状态获取
-    status = context.get_status()
-    print("上下文状态: {}".format(status))
-
-    # 清理
-    context.cleanup()
-    print("测试完成")
+        self.components.clear()
+        self.logger.info("应用上下文清理完成")

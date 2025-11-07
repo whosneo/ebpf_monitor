@@ -24,23 +24,12 @@ except ImportError:
 # 第三方库导入
 import yaml
 
-# 导入统一的配置类
+# 本地模块导入
 from .configs import AppConfig, LogConfig, MonitorsConfig, OutputConfig, ValidatedConfig
 
 
 class ConfigManager:
     """配置管理器"""
-
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls, *args, **kwargs):
-        """实现单例模式，确保全局唯一的 ConfigManager 实例"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super(ConfigManager, cls).__new__(cls)
-        return cls._instance
 
     def __init__(self, config_file="config/monitor_config.yaml"):
         # type: (str) -> None
@@ -50,11 +39,7 @@ class ConfigManager:
         Args:
             config_file: 配置文件路径
         """
-        # 首先初始化配置管理器，再初始化日志管理器，所以在初始化过程中只能使用print
-        if not hasattr(self, "_initialized"):  # 防止重复初始化
-            self._initialized = False
-            self._setup_config_manager(config_file)
-            self._initialized = True
+        self._setup_config_manager(config_file)
 
     def _setup_config_manager(self, config_file):
         # type: (str) -> None
@@ -64,9 +49,9 @@ class ConfigManager:
         Args:
             config_file: 配置文件路径
         """
-        # 延迟初始化日志管理器以避免循环导入
-        self.logger = None
-        self.log_manager = None
+        # 使用标准 logging 模块，避免循环依赖
+        import logging
+        self._logger = logging.getLogger('ConfigManager')
 
         # ebpf工具根目录
         self.base_dir = Path(__file__).parent.parent.parent.resolve()
@@ -80,15 +65,29 @@ class ConfigManager:
 
     def _load_config(self):
         """
-        加载配置文件
+        加载配置文件（带路径验证）
 
         Returns:
             bool: 加载是否成功
         """
+        # 注意：此方法在logger初始化之前调用，因此使用sys.stdout/stderr输出
         config_path = self.base_dir / self.config_file
+
+        # 验证配置文件路径
+        if not self._validate_config_path(config_path):
+            sys.stdout.write("配置文件路径验证失败，使用默认配置\n")
+            self.config_data = self._get_default_config_data()
+            return
+
         self.config_data = self._get_default_config_data()
         try:
             if config_path.exists():
+                # 验证文件可读性
+                if not config_path.is_file():
+                    sys.stderr.write("配置路径不是文件: {}\n".format(config_path))
+                    sys.stdout.write("使用默认配置\n")
+                    return
+
                 with open(str(config_path), "r") as f:
                     config_data = yaml.safe_load(f)
                     if config_data:
@@ -96,23 +95,58 @@ class ConfigManager:
                     else:
                         sys.stdout.write("配置文件为空，使用默认配置\n")
             else:
-                sys.stdout.write("配置文件不存在，使用默认配置\n")
+                sys.stdout.write("配置文件不存在: {}，使用默认配置\n".format(config_path))
         except (OSError, IOError) as e:
             # Python 2.7 compatibility - PermissionError doesn't exist
             if hasattr(e, 'errno') and e.errno == 13:  # Permission denied
-                sys.stderr.write("配置文件权限错误: {}\n".format(config_path))
+                sys.stderr.write("配置文件权限错误: {}。请检查文件权限\n".format(config_path))
+            else:
+                sys.stderr.write("读取配置文件失败: {}。错误: {}\n".format(config_path, e))
             raise
         except yaml.YAMLError as e:
-            sys.stderr.write("配置文件格式错误: {}\n".format(e))
+            sys.stderr.write("配置文件YAML格式错误: {}。请检查语法\n".format(e))
             raise
         except Exception as e:
-            sys.stderr.write("加载配置文件失败: {}\n".format(e))
-            sys.stdout.write("加载配置文件失败，使用默认配置\n")
+            sys.stderr.write("加载配置文件失败: {}。错误: {}\n".format(config_path, e))
+            sys.stdout.write("使用默认配置\n")
+
+    @staticmethod
+    def _validate_config_path(config_path):
+        # type: (Path) -> bool
+        """
+        验证配置文件路径的安全性
+        
+        Args:
+            config_path: 配置文件路径
+            
+        Returns:
+            bool: 路径是否有效
+        """
+        try:
+            # 解析为绝对路径
+            abs_path = config_path.resolve()
+
+            # 检查路径是否包含可疑字符（路径遍历攻击）
+            path_str = str(abs_path)
+            if '..' in path_str or path_str.startswith('/etc') or path_str.startswith('/sys'):
+                sys.stderr.write("配置文件路径不安全: {}\n".format(path_str))
+                return False
+
+            # 检查父目录是否存在
+            if not abs_path.parent.exists():
+                sys.stderr.write("配置文件所在目录不存在: {}\n".format(abs_path.parent))
+                return False
+
+            return True
+        except Exception as e:
+            sys.stderr.write("验证配置路径失败: {}\n".format(e))
+            return False
 
     @staticmethod
     def _get_default_config_data():
         # type: () -> Dict[str, Dict]
         """加载默认配置"""
+
         def _obj_to_dict(obj):
             """将对象转换为字典"""
             result = {}
@@ -120,7 +154,7 @@ class ConfigManager:
                 if not key.startswith('_'):
                     result[key] = value
             return result
-            
+
         return {
             "app": _obj_to_dict(AppConfig()),
             "logging": _obj_to_dict(LogConfig()),
@@ -138,14 +172,6 @@ class ConfigManager:
         self.log_config = LogConfig.validate(log_config)
         self.output_config = OutputConfig.validate(output_config)
         self.monitors_config = None  # 延迟初始化监控配置
-
-    def _get_logger(self):
-        """延迟初始化并获取logger"""
-        if self.logger is None:
-            from .log_manager import LogManager
-            self.log_manager = LogManager()
-            self.logger = self.log_manager.get_logger(self)
-        return self.logger
 
     def parse_validate_monitors_config(self):
         """解析并验证监控配置"""
@@ -206,23 +232,3 @@ class ConfigManager:
         # type: () -> MonitorsConfig
         """获取监控配置"""
         return self.monitors_config
-
-
-if __name__ == "__main__":
-    """测试函数"""
-    # 测试配置管理器
-    from .log_manager import LogManager
-
-    config_manager = ConfigManager()
-
-    log_manager = LogManager()
-    logger = log_manager.get_logger()
-
-    logger.info("=== 配置管理器测试 ===")
-
-    # 显示配置
-    logger.info("配置文件: {}".format(config_manager.config_file))
-    logger.info("应用配置: {}".format(config_manager.get_app_config()))
-    logger.info("日志配置: {}".format(config_manager.get_log_config()))
-    logger.info("输出配置: {}".format(config_manager.get_output_config()))
-    logger.info("监控配置: {}".format(config_manager.get_monitors_config()))

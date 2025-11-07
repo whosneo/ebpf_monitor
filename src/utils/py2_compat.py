@@ -175,7 +175,11 @@ except ImportError:
             enum_attrs = {}
             enum_members = []
             for key, value in attrs.items():
-                if not key.startswith('_') and not callable(value) and key not in ('__module__', '__qualname__'):
+                # 排除：私有属性、可调用对象、容器类型、装饰器对象、特殊属性
+                if (not key.startswith('_') and
+                        not callable(value) and
+                        not isinstance(value, (dict, set, list, tuple, staticmethod, classmethod, property)) and
+                        key not in ('__module__', '__qualname__')):
                     enum_member = EnumValue(key, value)
                     enum_attrs[key] = enum_member
                     enum_members.append(enum_member)
@@ -242,7 +246,7 @@ def safe_clear_collection(collection):
 # 导出所有兼容性工具
 __all__ = [
     'PY2', 'PY3', 'TYPE_CHECKING',
-    'Dict', 'List', 'Any', 'Optional', 'Union', 'Type', 'Callable',
+    'Dict', 'List', 'Any', 'Optional', 'Union', 'Type', 'Callable', 'Tuple', 'TextIO',
     'Path', 'HAS_PATHLIB',
     'Enum', 'ABC',
     'compat_super', 'safe_clear_collection',

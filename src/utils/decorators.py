@@ -106,7 +106,7 @@ def require_bpf_loaded(func):
     def wrapper(self, *args, **kwargs):
         # type: (*Any, **Any) -> Any
         if not hasattr(self, "bpf") or self.bpf is None:  # 不可以使用not self.bpf，部分系统BPF对象属性不同。
-            logger = getattr(self, "base_logger", getattr(self, "logger", None))
+            logger = getattr(self, "logger", None)
             if logger:
                 logger.error("eBPF程序未加载")
             else:

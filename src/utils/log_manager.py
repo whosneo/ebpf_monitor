@@ -50,23 +50,23 @@ class LogManager:
                     cls._instance = super(LogManager, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, log_dir="logs"):
-        # type: (str) -> None
+    def __init__(self, config_manager, log_dir="logs"):
+        # type: (ConfigManager, str) -> None
         """初始化 LogManager"""
         if not hasattr(self, "_initialized"):  # 防止重复初始化
             self._initialized = False
-            self._setup_log_manager(log_dir)
+            self._setup_log_manager(config_manager, log_dir)
             self._initialized = True
 
-    def _setup_log_manager(self, log_dir):
-        # type: (str) -> None
+    def _setup_log_manager(self, config_manager, log_dir):
+        # type: (ConfigManager, str) -> None
         """
         初始化日志系统，从配置中加载日志设置。
         """
         # 初始化日志记录器Map
         self.loggers = {}  # type: Dict[str, logging.Logger]
 
-        self.config_manager = ConfigManager()
+        self.config_manager = config_manager
 
         if Path(log_dir).is_absolute():
             self.log_dir = Path(log_dir)
@@ -124,7 +124,11 @@ class LogManager:
         if isinstance(obj, str):
             name = obj
         elif obj:
-            name = obj.__class__.__name__
+            # 如果是类对象，使用__name__；如果是实例对象，使用__class__.__name__
+            if isinstance(obj, type):
+                name = obj.__name__
+            else:
+                name = obj.__class__.__name__
         else:
             name = self.namespace
 
