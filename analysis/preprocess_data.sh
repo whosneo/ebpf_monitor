@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# eBPF数据分割脚本
+# eBPF数据预处理脚本
 # 使用grep按日期范围快速分割数据文件
 
 set -e
@@ -9,6 +9,7 @@ set -e
 OUTPUT_DIR="../output"
 DAILY_DATA_DIR="./daily_data"
 VERBOSE=false
+HOSTNAME=$(hostname)
 
 # 颜色输出
 RED='\033[0;31m'
@@ -19,13 +20,14 @@ NC='\033[0m' # No Color
 
 # 打印帮助信息
 show_help() {
-    echo "eBPF数据分割脚本"
+    echo "eBPF数据预处理脚本"
     echo ""
-    echo "用法: $0 [选项] <开始日期> <结束日期>"
+    echo "用法: $0 [选项] <日期> [结束日期]"
     echo ""
     echo "参数:"
-    echo "  开始日期          开始日期 (YYYY-MM-DD 格式)"
-    echo "  结束日期          结束日期 (YYYY-MM-DD 格式)"
+    echo "  日期              处理日期 (YYYY-MM-DD 格式)"
+    echo "  结束日期          可选，结束日期 (YYYY-MM-DD 格式)"
+    echo "                    如果不提供，则只处理单个日期"
     echo ""
     echo "选项:"
     echo "  -o, --output-dir DIR     指定output目录 (默认: ../output)"
@@ -40,8 +42,9 @@ show_help() {
     echo "  - 内存占用几乎为0"
     echo ""
     echo "示例:"
-    echo "  $0 2025-10-20 2025-10-25"
-    echo "  $0 -v -o /path/to/output 2025-10-20 2025-10-25"
+    echo "  $0 2025-11-03                    # 处理单个日期"
+    echo "  $0 2025-10-20 2025-10-25         # 处理日期范围"
+    echo "  $0 -v -o /path/to/output 2025-11-03"
     echo ""
 }
 
@@ -138,7 +141,7 @@ process_file() {
     local output_files=()
     for date in "${dates[@]}"; do
         local compact_date=$(date_to_compact "$date")
-        local output_file="$DAILY_DATA_DIR/${monitor_type}_${compact_date}.csv"
+        local output_file="$DAILY_DATA_DIR/$HOSTNAME/${monitor_type}_${compact_date}.csv"
         output_files+=("$output_file")
         
         # 如果文件不存在，创建并写入头部
@@ -151,7 +154,7 @@ process_file() {
     # 使用grep按日期过滤数据
     for date in "${dates[@]}"; do
         local compact_date=$(date_to_compact "$date")
-        local output_file="$DAILY_DATA_DIR/${monitor_type}_${compact_date}.csv"
+        local output_file="$DAILY_DATA_DIR/$HOSTNAME/${monitor_type}_${compact_date}.csv"
         
         # 构建grep模式 - 匹配日期格式 YYYY-MM-DD
         local grep_pattern="$date"
@@ -202,15 +205,15 @@ main() {
         esac
     done
     
-    # 检查参数数量
-    if [ $# -ne 2 ]; then
-        log_error "需要提供开始日期和结束日期"
+    # 检查参数数量（支持1个或2个日期参数）
+    if [ $# -eq 0 ] || [ $# -gt 2 ]; then
+        log_error "需要提供1个或2个日期参数"
         show_help
         exit 1
     fi
     
     local start_date="$1"
-    local end_date="$2"
+    local end_date="${2:-$1}"  # 如果没有第二个参数，使用第一个参数作为结束日期
     
     # 验证日期格式
     if ! validate_date "$start_date" || ! validate_date "$end_date"; then
@@ -226,10 +229,11 @@ main() {
     log_info "开始数据分割..."
     log_info "日期范围: $start_date 到 $end_date"
     log_info "输入目录: $OUTPUT_DIR"
-    log_info "输出目录: $DAILY_DATA_DIR"
+    log_info "主机名: $HOSTNAME"
+    log_info "输出目录: $DAILY_DATA_DIR/$HOSTNAME"
     
-    # 创建输出目录
-    mkdir -p "$DAILY_DATA_DIR"
+    # 创建输出目录（按主机名分目录）
+    mkdir -p "$DAILY_DATA_DIR/$HOSTNAME"
     
     # 检查输入目录
     if [ ! -d "$OUTPUT_DIR" ]; then
@@ -260,7 +264,7 @@ main() {
         local monitor_type=""
         
         # 提取监控器类型
-        if [[ $basename =~ ^(exec|syscall|io|interrupt|func|open|page_fault)_ ]]; then
+        if [[ $basename =~ ^(exec|syscall|bio|interrupt|func|open|page_fault)_ ]]; then
             monitor_type="${BASH_REMATCH[1]}"
             monitor_files["$monitor_type"]+="$file "
         else
@@ -294,7 +298,7 @@ main() {
     echo ""
     log_info "清理空文件..."
     local empty_files=0
-    local output_files=($(find "$DAILY_DATA_DIR" -name "*.csv" -type f | sort))
+    local output_files=($(find "$DAILY_DATA_DIR/$HOSTNAME" -name "*.csv" -type f | sort))
     
     for file in "${output_files[@]}"; do
         local line_count=$(wc -l < "$file")
@@ -310,10 +314,10 @@ main() {
     fi
     
     # 显示最终生成的文件
-    output_files=($(find "$DAILY_DATA_DIR" -name "*.csv" -type f | sort))
+    output_files=($(find "$DAILY_DATA_DIR/$HOSTNAME" -name "*.csv" -type f | sort))
     if [ ${#output_files[@]} -gt 0 ]; then
         echo ""
-        log_info "最终生成的日文件:"
+        log_info "最终生成的日文件 ($HOSTNAME):"
         for file in "${output_files[@]}"; do
             local line_count=$(wc -l < "$file")
             echo "  $(basename "$file"): $((line_count - 1)) 行数据"
