@@ -11,7 +11,7 @@ eBPF性能监控工具 - 主程序入口
 
 示例:
     python3 main.py -c config/monitor_config.yaml
-    python3 main.py -p zme,zmb --verbose
+    python3 main.py --verbose
 """
 
 # 标准库导入
@@ -62,8 +62,6 @@ def parse_arguments():
   %(prog)s                          # 使用默认配置启动
   %(prog)s -c custom.yaml           # 使用自定义配置文件
   %(prog)s -m exec                  # 使用指定监控器
-  %(prog)s -p zme,zmb               # 监控指定进程
-  %(prog)s -u root,czce             # 监控指定用户
   %(prog)s --daemon                 # 后台运行模式
   %(prog)s --verbose                # 详细输出模式
   %(prog)s --version                # 显示版本信息
@@ -81,18 +79,6 @@ def parse_arguments():
         "--monitors",
         type=str,
         help="监控器列表，用逗号分隔 (例如: exec,func,syscall,open,io,interrupt,io,memory)",
-    )
-    parser.add_argument(
-        "-p",
-        "--processes",
-        type=str,
-        help="目标进程名列表，用逗号分隔 (例如: zme,zmb)",
-    )
-    parser.add_argument(
-        "-u",
-        "--users",
-        type=str,
-        help="目标用户名列表，用逗号分隔 (例如: root,czce)",
     )
     parser.add_argument(
         "-d",
@@ -223,20 +209,6 @@ if __name__ == "__main__":
         if not ebpf_monitor.load():
             logger.error("加载监控器失败")
             sys.exit(1)
-
-        # 解析目标进程
-        if args.processes:
-            processes = [p.strip() for p in args.processes.split(",")]
-            if not ebpf_monitor.add_target_processes(processes):
-                logger.error("添加目标进程失败")
-                sys.exit(1)
-
-        # 解析目标用户
-        if args.users:
-            users = [u.strip() for u in args.users.split(",")]
-            if not ebpf_monitor.add_target_users(users):
-                logger.error("添加目标用户失败")
-                sys.exit(1)
 
         # 在daemon模式下，设置eBPF监控器实例到daemon管理器
         if is_daemon_child:
