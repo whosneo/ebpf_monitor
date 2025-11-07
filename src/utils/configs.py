@@ -8,12 +8,12 @@
 每个配置类都包含自己的验证逻辑。
 """
 
+from abc import abstractmethod
+
 try:
-    from abc import ABC, abstractmethod
+    from abc import ABC
 except ImportError:
-    # Python 2.7 fallback
-    from abc import ABCMeta, abstractmethod
-    ABC = ABCMeta('ABC', (object,), {})
+    from ..utils.py2_compat import ABC
 # 兼容性导入
 try:
     from typing import Dict, Any, Type
@@ -37,10 +37,10 @@ class ValidatedConfig(ABC):
 
 class AppConfig(ValidatedConfig):
     """应用配置"""
-    
-    def __init__(self, name="ebpf_monitor", version="1.0.0", 
+
+    def __init__(self, name="ebpf_monitor", version="1.0.0",
                  description="eBPF Monitor for Linux", author="bwyu",
-                 email="bwyu@czce.com.cn", 
+                 email="bwyu@czce.com.cn",
                  url="https://github.com/whosneo/ebpf_monitor",
                  environment="production", debug=False, **kwargs):
         self.name = name
@@ -78,11 +78,11 @@ class AppConfig(ValidatedConfig):
 
 class LogConfig(ValidatedConfig):
     """日志配置"""
-    
+
     def __init__(self, version=1, level="INFO", formatters=None, handlers=None, loggers=None, **kwargs):
         self.version = version
         self.level = level
-        
+
         # 默认格式化器
         if formatters is None:
             formatters = {
@@ -90,7 +90,7 @@ class LogConfig(ValidatedConfig):
                 "simple": {"format": "%(levelname)s: %(message)s"}
             }
         self.formatters = formatters
-        
+
         # 默认处理器
         if handlers is None:
             handlers = {
@@ -99,12 +99,12 @@ class LogConfig(ValidatedConfig):
                          "filename": "monitor.log", "when": "D", "interval": 1, "backupCount": 365}
             }
         self.handlers = handlers
-        
+
         # 默认日志记录器
         if loggers is None:
             loggers = {}
         self.loggers = loggers
-        
+
         # 处理额外的关键字参数
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -137,13 +137,13 @@ class LogConfig(ValidatedConfig):
 
 class OutputConfig(ValidatedConfig):
     """输出控制器配置"""
-    
+
     def __init__(self, buffer_size=2000, flush_interval=2.0, csv_delimiter=",", include_header=True, **kwargs):
         self.buffer_size = buffer_size
         self.flush_interval = flush_interval  # 秒
         self.csv_delimiter = csv_delimiter
         self.include_header = include_header
-        
+
         # 处理额外的关键字参数
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -238,6 +238,6 @@ class MonitorsConfig(ValidatedConfig):
 
         # 第3步：对未知配置发出警告
         for unknown_name in monitors_config._unknown_configs:
-            raise ValueError("未知的监控器配置: {}, 请检查监控器名称或确认监控器已正确注册".format(unknown_name))
+            raise ValueError("未知的监控器配置: {}，请检查监控器名称或确认监控器已正确注册".format(unknown_name))
 
         return monitors_config

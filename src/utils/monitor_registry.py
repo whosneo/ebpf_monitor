@@ -8,11 +8,12 @@
 """
 
 import importlib
+
 # 兼容性导入
 try:
-    from typing import Dict, Type, List, TYPE_CHECKING
+    from typing import Any, Dict, Type, List, TYPE_CHECKING
 except ImportError:
-    from .py2_compat import Dict, Type, List, TYPE_CHECKING
+    from .py2_compat import Any, Dict, Type, List, TYPE_CHECKING
 
 from ..monitors.base import BaseMonitor
 
@@ -132,32 +133,15 @@ class MonitorRegistry:
         return registered_monitors[monitor_name]
 
     def get_statistics(self):
-        # type: () -> Dict[str, any]
+        # type: () -> Dict[str, Any]
         """
         获取注册统计信息
         
         Returns:
-            Dict[str, any]: 统计信息
+            Dict[str, Any]: 统计信息
         """
         monitors = self.get_registered_monitors()
         return {
             "total_registered": len(monitors),
             "monitor_names": list(monitors.keys())
         }
-
-
-if __name__ == "__main__":
-    """测试模式"""
-    from .application_context import ApplicationContext
-    print("=== 监控器注册管理器测试 ===")
-
-    test_context = ApplicationContext()
-    test_registry = test_context.get_monitor_registry()
-
-    # 发现并注册监控器
-    test_monitors = test_registry.get_registered_monitors()
-    print("发现的监控器: {}".format(list(test_monitors.keys())))
-
-    # 获取统计信息
-    test_stats = test_registry.get_statistics()
-    print("统计信息: {}".format(test_stats))

@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # encoding: utf-8
-
 """
 eBPF性能监控工具
 
@@ -10,7 +9,7 @@ eBPF性能监控工具
 import pwd
 import threading
 import time
-# dataclass已替换为普通类以兼容Python2.7
+
 # 兼容性导入
 try:
     from typing import List, Dict, Optional, Any, Type, TYPE_CHECKING
@@ -28,14 +27,14 @@ if TYPE_CHECKING:
 
 class MonitorStatus:
     """监控器状态"""
-    
+
     def __init__(self, type=None, loaded=False, running=False, error=None, last_update=0.0):
         # type: (str, bool, bool, Optional[str], float) -> None
-        self.type = type # type: str
-        self.loaded = loaded # type: bool
-        self.running = running # type: bool
-        self.error = error # type: Optional[str]
-        self.last_update = last_update # type: float
+        self.type = type  # type: str
+        self.loaded = loaded  # type: bool
+        self.running = running  # type: bool
+        self.error = error  # type: Optional[str]
+        self.last_update = last_update  # type: float
 
 
 class eBPFMonitor:
@@ -425,8 +424,3 @@ class eBPFMonitor:
             bool: 监控状态
         """
         return self.running
-
-
-if __name__ == "__main__":
-    # 禁止直接运行
-    pass

@@ -14,21 +14,23 @@ eBPF性能监控工具 - 主程序入口
     python3 main.py -p zme,zmb --verbose
 """
 
+# 标准库导入
 import argparse
 import logging
 import sys
 import time
+
 # 兼容性导入
 try:
     from pathlib import Path
 except ImportError:
     from src.utils.py2_compat import Path
-
 try:
     from typing import List
 except ImportError:
     from src.utils.py2_compat import List
 
+# 本地模块导入
 from src.utils.application_context import ApplicationContext
 
 # 必要目录
@@ -36,6 +38,7 @@ REQUIRED_DIRS = ["src", "src/ebpf", "src/monitors", "src/utils", "config", "logs
 
 
 def get_version_info():
+    # type: () -> str
     """获取版本信息，支持多种来源的容错处理"""
     try:
         # 优先从配置文件获取
@@ -125,6 +128,7 @@ def parse_arguments():
 if __name__ == "__main__":
     """主函数"""
     # 确保当前工作目录正确，如果不正确则退出程序
+    # 注意：这里使用sys.stderr是因为logger尚未初始化，这是程序启动前的检查
     current_dir = Path.cwd().name
     expected_dir = Path(__file__).resolve().parent.name
 
@@ -164,6 +168,7 @@ if __name__ == "__main__":
             print("守护进程停止成功")
             sys.exit(0)
         else:
+            # 注意：这里使用sys.stderr是为了与用户交互，与上面的print保持输出一致性
             sys.stderr.write("守护进程停止失败\n")
             sys.exit(1)
 

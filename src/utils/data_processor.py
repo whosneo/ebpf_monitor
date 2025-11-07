@@ -4,6 +4,7 @@
 数据处理工具类，提供通用的数据处理方法
 """
 
+# 标准库导入
 import time
 # 兼容性导入
 try:
@@ -26,7 +27,6 @@ class DataProcessor:
 
     @staticmethod
     def format_timestamp(timestamp, fmt='%Y-%m-%d %H:%M:%S'):
-        # type: (float, str) -> str
         # type: (float, str) -> str
         """统一时间格式化"""
         return time.strftime(fmt, time.localtime(timestamp))

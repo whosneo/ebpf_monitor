@@ -12,16 +12,12 @@ import errno
 import os
 import platform
 import subprocess
+
 # 兼容性导入
 try:
     from typing import Any, Dict, List, Tuple, TYPE_CHECKING
 except ImportError:
-    # Python 2.7 fallback
-    Any = object
-    Dict = dict
-    List = list
-    Tuple = tuple
-    TYPE_CHECKING = False
+    from .py2_compat import Any, Dict, List, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     # noinspection PyUnusedImports
@@ -181,10 +177,10 @@ class CapabilityChecker:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
-            
+
             # 等待进程完成
             stdout, stderr = process.communicate()
-            
+
             if process.returncode == 0:
                 version_info = stdout.strip().decode('utf-8') if isinstance(stdout, bytes) else stdout.strip()
                 self.logger.debug("bpftool可用: {}".format(version_info))
@@ -375,28 +371,3 @@ class CapabilityChecker:
             "root_privileges": self.check_root_privileges(),
             "capabilities": self.get_available_capabilities(),
         }
-
-
-if __name__ == "__main__":
-    """测试函数"""
-    from .application_context import ApplicationContext
-
-    test_context = ApplicationContext()
-    capability = test_context.get_capability_checker()
-
-    print("=== 内核兼容性检查 ===")
-    print("内核版本: {}".format(capability.kernel_version))
-    print("系统架构: {}".format(capability.architecture))
-    print("eBPF支持: {}".format(capability.check_ebpf_support()))
-    print("Root权限: {}".format(capability.check_root_privileges()))
-
-    print("\n=== 可用功能 ===")
-    test_capabilities = capability.get_available_capabilities()
-    for name, available in test_capabilities.items():
-        status = "✅" if available else "❌"
-        print("{} {}".format(status, name))
-
-    print("\n=== 编译标志 ===")
-    test_flags = capability.get_compile_flags()
-    for flag in test_flags:
-        print("  {}".format(flag))
