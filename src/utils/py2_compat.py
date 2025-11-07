@@ -15,21 +15,24 @@ PY3 = sys.version_info[0] == 3
 
 # typing模块兼容性处理
 try:
-    from typing import TYPE_CHECKING, Dict, List, Any, Optional, Union, Type, Callable
+    from typing import TYPE_CHECKING, Dict, List, Any, Optional, Union, Type, Callable, Tuple, TextIO
 except ImportError:
     # Python 2.7 fallback
     TYPE_CHECKING = False
     Dict = dict
-    List = list  
+    List = list
     Any = object
     Optional = object
     Union = object
     Type = object
     Callable = object
+    Tuple = tuple
+    TextIO = object  # 文件对象类型
 
 # pathlib兼容性处理
 try:
     from pathlib import Path
+
     HAS_PATHLIB = True
 except ImportError:
     import os
@@ -126,41 +129,14 @@ except ImportError:
             """检查路径是否为目录"""
             return os.path.isdir(self._path)
 
-# 字符串格式化兼容性
-def format_string(template, *args, **kwargs):
-    """统一的字符串格式化函数"""
-    if PY2:
-        # Python 2.7使用%格式化或.format()
-        if args and not kwargs:
-            return template % args
-        elif kwargs and not args:
-            return template.format(**kwargs)
-        else:
-            return template.format(*args, **kwargs)
-    else:
-        # Python 3可以使用所有格式化方式
-        return template.format(*args, **kwargs)
+        def stat(self):
+            """获取文件状态信息，返回 os.stat_result 对象"""
+            return os.stat(self._path)
 
-# 字节字符串处理兼容性
-def ensure_str(value):
-    """确保返回字符串类型"""
-    if PY2:
-        if isinstance(value, unicode):
-            return value.encode('utf-8')
-        return str(value)
-    else:
-        if isinstance(value, bytes):
-            return value.decode('utf-8', errors='ignore')
-        return str(value)
+        def unlink(self):
+            """删除文件（不能删除目录）"""
+            os.unlink(self._path)
 
-def ensure_bytes(value):
-    """确保返回字节类型"""
-    if PY2:
-        return str(value)
-    else:
-        if isinstance(value, str):
-            return value.encode('utf-8')
-        return bytes(value)
 
 # super()兼容性处理
 def compat_super(cls, instance):
@@ -170,17 +146,24 @@ def compat_super(cls, instance):
     else:
         return super()
 
-# 异常兼容性
-def reraise(exc_type, exc_value, exc_traceback=None):
-    """重新抛出异常的兼容方式"""
-    if PY2:
-        exec("raise exc_type, exc_value, exc_traceback")
-    else:
-        if exc_value is None:
-            exc_value = exc_type()
-        if exc_value.__traceback__ is not exc_traceback:
-            raise exc_value.with_traceback(exc_traceback)
-        raise exc_value
+
+# ProcessLookupError兼容性处理
+try:
+    ProcessLookupError = ProcessLookupError
+except NameError:
+    # Python 2.7 中不存在 ProcessLookupError
+    # 它是 Python 3.3+ 引入的 OSError 子类，用于表示进程查找失败
+    # 在 Python 2 中，相同的错误会抛出 OSError
+    ProcessLookupError = OSError
+
+# ABC (Abstract Base Class) 兼容性处理
+try:
+    from abc import ABC
+except ImportError:
+    # Python 2.7 fallback
+    from abc import ABCMeta
+
+    ABC = ABCMeta('ABC', (object,), {})
 
 # enum兼容性处理
 try:
@@ -228,20 +211,40 @@ except ImportError:
     class Enum(object):
         __metaclass__ = EnumMeta
 
-# 导入兼容性助手
-def safe_import(module_name, fallback=None):
-    """安全导入模块"""
-    try:
-        return __import__(module_name)
-    except ImportError:
-        return fallback
+
+# 集合清理兼容性助手
+def safe_clear_collection(collection):
+    """
+    Python 2/3 兼容的集合清空函数
+    
+    Args:
+        collection: 字典、列表或其他支持clear()的集合
+    
+    Returns:
+        清空后的集合(如果不支持clear则返回新的空集合)
+    """
+    if hasattr(collection, 'clear'):
+        collection.clear()
+        return collection
+    else:
+        # Python 2.7 dict没有clear()方法的fallback
+        if isinstance(collection, dict):
+            return {}
+        elif isinstance(collection, list):
+            return []
+        elif isinstance(collection, set):
+            return set()
+        else:
+            # 尝试通过构造函数创建空集合
+            return type(collection)()
+
 
 # 导出所有兼容性工具
 __all__ = [
     'PY2', 'PY3', 'TYPE_CHECKING',
     'Dict', 'List', 'Any', 'Optional', 'Union', 'Type', 'Callable',
     'Path', 'HAS_PATHLIB',
-    'Enum',
-    'format_string', 'ensure_str', 'ensure_bytes',
-    'compat_super', 'reraise', 'safe_import'
+    'Enum', 'ABC',
+    'compat_super', 'safe_clear_collection',
+    'ProcessLookupError'
 ]

@@ -248,44 +248,36 @@ class eBPFMonitor:
                     self.logger.error("停止{}监控器失败: {}".format(monitor_type, e))
 
     def cleanup(self):
-        """清理所有资源"""
-        # cleanup职责：仅清理资源，不负责停止监控
-        # 调用者应该先调用stop()再调用cleanup()
-        for monitor_type, monitor in self.monitors.items():
+        """
+        清理所有资源（幂等操作）
+        
+        注意: cleanup职责仅为清理资源，不负责停止监控
+        调用者应该先调用stop()再调用cleanup()
+        此方法可以安全地多次调用
+        """
+        # 检查是否已清理，避免重复操作
+        if getattr(self, '_cleaned_up', False):
+            self.logger.debug("eBPFMonitor资源已清理，跳过重复清理")
+            return
+
+        # 清理各个监控器的资源
+        for monitor_type, monitor in list(self.monitors.items()):
             try:
                 monitor.cleanup()
                 self.logger.info("{}监控器资源已清理".format(monitor_type))
             except Exception as e:
                 self.logger.error("清理{}监控器资源失败: {}".format(monitor_type, e))
 
-        # Python 2.7兼容性：清理集合和字典
-        # target_processes 和 target_users 是字典
-        if hasattr(self.target_processes, 'clear'):
-            self.target_processes.clear()
-        else:
-            self.target_processes = {}
-        if hasattr(self.target_users, 'clear'):
-            self.target_users.clear()
-        else:
-            self.target_users = {}
-        # all_monitors 和 selected_monitors 是列表/字典
-        if hasattr(self.all_monitors, 'clear'):
-            self.all_monitors.clear()
-        else:
-            self.all_monitors = {}
-        if hasattr(self.selected_monitors, 'clear'):
-            self.selected_monitors.clear()
-        else:
-            self.selected_monitors = {}
-        # Python 2.7兼容性：dict没有clear()方法
-        if hasattr(self.monitors, 'clear'):
-            self.monitors.clear()
-        else:
-            self.monitors = {}
-        if hasattr(self.monitor_status, 'clear'):
-            self.monitor_status.clear()
-        else:
-            self.monitor_status = {}
+        # Python 2/3 兼容: 使用统一的集合清理函数
+        from .utils.py2_compat import safe_clear_collection
+        self.all_monitors = safe_clear_collection(self.all_monitors)
+        self.selected_monitors = safe_clear_collection(self.selected_monitors)
+        self.monitors = safe_clear_collection(self.monitors)
+        self.monitor_status = safe_clear_collection(self.monitor_status)
+
+        # 标记已清理
+        self._cleaned_up = True
+        self.logger.info("eBPFMonitor资源清理完成")
 
     def is_running(self):
         # type: () -> bool
