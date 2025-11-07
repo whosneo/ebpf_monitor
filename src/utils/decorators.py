@@ -8,6 +8,7 @@
 
 import functools
 import sys
+
 # 兼容性导入
 try:
     from typing import Callable, Any, Dict, Type, TYPE_CHECKING
@@ -80,7 +81,8 @@ def require_running(func):
             if logger:
                 logger.error("{}未启动".format(self.__class__.__name__))
             else:
-                sys.stderr.write("错误: {}未启动\n".format(self.__class__.__name__))  # 备用日志
+                # 注意：当logger不可用时使用sys.stderr作为备用输出
+                sys.stderr.write("错误: {}未启动\n".format(self.__class__.__name__))
 
             # 返回 False 表示操作失败
             return False
@@ -108,29 +110,10 @@ def require_bpf_loaded(func):
             if logger:
                 logger.error("eBPF程序未加载")
             else:
+                # 注意：当logger不可用时使用sys.stderr作为备用输出
                 sys.stderr.write("错误: eBPF程序未加载\n")
             return False
         else:
             return func(self, *args, **kwargs)
 
     return wrapper
-
-
-if __name__ == "__main__":
-    # 简单的测试示例
-    class MockMonitor:
-        def __init__(self):
-            self.running = False
-            self.logger = None
-
-        @require_running
-        def test_method(self):
-            return "成功执行"
-
-
-    # 测试
-    monitor = MockMonitor()
-    print("未启动时:", monitor.test_method())  # 返回 False
-
-    monitor.running = True
-    print("已启动时:", monitor.test_method())  # 返回 "成功执行"

@@ -10,6 +10,7 @@ import logging
 import logging.config
 import sys
 import threading
+
 # 兼容性导入
 try:
     from typing import Any, Dict
@@ -191,31 +192,3 @@ class LogManager:
         except Exception:
             # 最终回退到默认路径
             return self.log_dir / "monitor.log"
-
-
-if __name__ == "__main__":
-    """测试函数"""
-    config_manager = ConfigManager()
-    log_manager = LogManager()
-
-    logger = log_manager.get_logger()
-    logger.debug("This is a debug message")
-    logger.info("This is an info message")
-    logger.warning("This is a warning message")
-    logger.error("This is an error message")
-
-    test_logger = log_manager.get_logger("test_logger")
-    test_logger.debug("This is a debug message")
-    test_logger.info("This is an info message")
-    test_logger.warning("This is a warning message")
-    test_logger.error("This is an error message")
-
-    log_manager.set_level(logging.WARNING)
-    logger.debug("This is a debug message")
-    logger.info("This is an info message")
-    logger.warning("This is a warning message")
-    logger.error("This is an error message")
-    test_logger.debug("This is a debug message")
-    test_logger.info("This is an info message")
-    test_logger.warning("This is a warning message")
-    test_logger.error("This is an error message")

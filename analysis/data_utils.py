@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+# encoding: utf-8
 """
 数据处理工具函数
 提供时间戳处理、数据清洗、文件操作等基础功能
@@ -15,7 +16,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
+def parse_timestamp(timestamp_str):
     """
     解析时间戳字符串，支持多种格式
     
@@ -39,10 +40,10 @@ def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
             # 尝试解析标准时间格式
             return datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
         except ValueError:
-            logger.warning(f"无法解析时间戳: {timestamp_str}")
+            logger.warning("无法解析时间戳: {}".format(timestamp_str))
             return None
 
-def extract_date(timestamp_str: str) -> Optional[str]:
+def extract_date(timestamp_str):
     """
     从时间戳中提取日期字符串 (YYYYMMDD格式)
     
@@ -57,7 +58,7 @@ def extract_date(timestamp_str: str) -> Optional[str]:
         return dt.strftime('%Y%m%d')
     return None
 
-def get_monitor_type(filename: str) -> Optional[str]:
+def get_monitor_type(filename):
     """
     从文件名中提取监控器类型
     
@@ -105,7 +106,7 @@ def scan_output_files(output_dir: str) -> Dict[str, List[str]]:
     return files_by_monitor
 
 
-def safe_read_csv(filepath: str, chunk_size: int = 10000) -> pd.DataFrame:
+def safe_read_csv(filepath, chunk_size=10000):
     """
     安全读取CSV文件，处理各种格式问题
     
@@ -168,16 +169,16 @@ def safe_read_csv(filepath: str, chunk_size: int = 10000) -> pd.DataFrame:
     
     for strategy in read_strategies:
         try:
-            logger.debug(f"尝试使用{strategy['name']}读取文件: {filepath}")
+            logger.debug("尝试使用{}读取文件: {}".format(strategy['name'], filepath))
             
             # 首先尝试直接读取
             try:
                 df = pd.read_csv(filepath, **strategy['params'])
                 if not df.empty:
-                    logger.info(f"成功读取文件 {filepath} (使用{strategy['name']}, 行数: {len(df)})")
+                    logger.info("成功读取文件 {} (使用{}, 行数: {})".format(filepath, strategy['name'], len(df)))
                     return df
             except Exception as e:
-                logger.debug(f"{strategy['name']}直接读取失败: {e}")
+                logger.debug("{}直接读取失败: {}".format(strategy['name'], e))
                 
                 # 尝试分块读取
                 try:
@@ -188,21 +189,21 @@ def safe_read_csv(filepath: str, chunk_size: int = 10000) -> pd.DataFrame:
                     
                     if chunks:
                         df = pd.concat(chunks, ignore_index=True)
-                        logger.info(f"成功分块读取文件 {filepath} (使用{strategy['name']}, 行数: {len(df)})")
+                        logger.info("成功分块读取文件 {} (使用{}, 行数: {})".format(filepath, strategy['name'], len(df)))
                         return df
                 except Exception as e2:
-                    logger.debug(f"{strategy['name']}分块读取失败: {e2}")
+                    logger.debug("{}分块读取失败: {}".format(strategy['name'], e2))
                     continue
         
         except Exception as e:
-            logger.debug(f"{strategy['name']}完全失败: {e}")
+            logger.debug("{}完全失败: {}".format(strategy['name'], e))
             continue
     
     # 所有策略都失败，尝试手动解析
-    logger.warning(f"所有标准方法都失败，尝试手动解析: {filepath}")
+    logger.warning("所有标准方法都失败，尝试手动解析: {}".format(filepath))
     return manual_parse_csv(filepath)
 
-def manual_parse_csv(filepath: str) -> pd.DataFrame:
+def manual_parse_csv(filepath):
     """
     手动解析CSV文件，处理严重格式问题
     
@@ -265,22 +266,22 @@ def manual_parse_csv(filepath: str) -> pd.DataFrame:
                         rows.append(fields)
                 
                 except Exception as e:
-                    logger.debug(f"跳过问题行 {line_num}: {e}")
+                    logger.debug("跳过问题行 {}: {}".format(line_num, e))
                     continue
         
         if header and rows:
             df = pd.DataFrame(rows, columns=header)
-            logger.info(f"手动解析成功 {filepath} (行数: {len(df)})")
+            logger.info("手动解析成功 {} (行数: {})".format(filepath, len(df)))
             return df
         else:
-            logger.warning(f"手动解析失败，文件可能为空: {filepath}")
+            logger.warning("手动解析失败，文件可能为空: {}".format(filepath))
             return pd.DataFrame()
     
     except Exception as e:
-        logger.error(f"手动解析文件失败 {filepath}: {e}")
+        logger.error("手动解析文件失败 {}: {}".format(filepath, e))
         return pd.DataFrame()
 
-def get_date_range_from_files(files: List[str]) -> Tuple[Optional[str], Optional[str]]:
+def get_date_range_from_files(files):
     """
     从文件列表中获取日期范围
     
@@ -308,7 +309,7 @@ def get_date_range_from_files(files: List[str]) -> Tuple[Optional[str], Optional
                     if date_str:
                         dates.append(date_str)
             except Exception as e:
-                logger.debug(f"无法从文件内容获取日期 {filepath}: {e}")
+                logger.debug("无法从文件内容获取日期 {}: {}".format(filepath, e))
     
     if dates:
         dates.sort()

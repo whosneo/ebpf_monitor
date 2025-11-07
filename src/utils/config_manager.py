@@ -7,19 +7,21 @@
 默认先加载验证基础配置，监控器配置延迟加载。
 """
 
+# 标准库导入
 import sys
 import threading
+
 # 兼容性导入
 try:
     from typing import Dict
 except ImportError:
     from .py2_compat import Dict
-
 try:
     from pathlib import Path
 except ImportError:
     from .py2_compat import Path
 
+# 第三方库导入
 import yaml
 
 # 导入统一的配置类

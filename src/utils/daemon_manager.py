@@ -11,6 +11,7 @@ import os
 import signal
 import sys
 import threading
+
 # 兼容性导入
 try:
     from typing import Optional
@@ -341,11 +342,3 @@ class DaemonManager:
             ebpf_monitor: eBPFMonitor实例
         """
         self.ebpf_monitor = ebpf_monitor
-
-
-if __name__ == "__main__":
-    # 测试函数
-    daemon_manager = DaemonManager()
-    print("守护进程是否运行: {}".format(daemon_manager.is_running()))
-    if daemon_manager.is_running():
-        print("守护进程PID: {}".format(daemon_manager.get_daemon_pid()))

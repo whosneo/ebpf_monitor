@@ -9,20 +9,21 @@
 - 多个监控器：仅CSV文件输出
 """
 
+# 标准库导入
 import csv
 import sys
 import threading
 import time
 from collections import defaultdict, deque
+
+# 兼容性导入
 try:
     from enum import Enum
 except ImportError:
-    # Python 2.7 fallback
     from .py2_compat import Enum
 try:
     from pathlib import Path
 except ImportError:
-    # Python 2.7 fallback
     from .py2_compat import Path
 try:
     from typing import Dict, Any, TextIO
@@ -32,6 +33,7 @@ except ImportError:
     Any = object
     TextIO = object
 
+# 本地模块导入
 from .config_manager import ConfigManager
 from .configs import OutputConfig
 from .log_manager import LogManager
