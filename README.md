@@ -18,7 +18,7 @@
 
 **运行环境**
 - Linux 内核版本 >= 4.1（推荐 4.18+）
-- Python 3.7+
+- Python 2.7+ 或 Python 3.7+（完全兼容Python 2.7）
 - root 权限
 
 **硬件要求**
@@ -60,15 +60,11 @@ cd ebpf
 
 # 默认启动（所有监控器）
 sudo python3 main.py
+# 或使用Python 2.7
+sudo python main.py
 
 # 启动特定监控器
-sudo python3 main.py -m exec,func,syscall,io,open,interrupt,page_fault
-
-# 监控特定进程
-sudo python3 main.py -p nginx,mysql,redis
-
-# 监控特定用户
-sudo python3 main.py -u root,www-data
+sudo python3 main.py -m exec,func,syscall,bio,open,interrupt,page_fault
 
 # 详细输出模式
 sudo python3 main.py --verbose
@@ -141,7 +137,7 @@ ebpf/
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    应用层 (Application)                  │
-│                main.py + 命令行接口                      │
+│                main.py + 命令行接口                       │
 └─────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────┐
 │                    控制层 (Control)                      │
@@ -158,11 +154,11 @@ ebpf/
 └─────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────┐
 │                   监控层 (Monitor)                       │
-│    BaseMonitor → ExecMonitor (可扩展其他监控器)          │
+│    BaseMonitor → ExecMonitor (可扩展其他监控器)            │
 └─────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────┐
 │                   内核层 (Kernel)                        │
-│              eBPF Programs (C 语言)                     │
+│              eBPF Programs (C 语言)                      │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -175,7 +171,7 @@ ebpf/
 
 **eBPFMonitor**
 - 主控制器，协调所有监控器的工作
-- 支持目标进程和用户过滤
+- 支持多监控器并发运行
 - 分层锁架构优化并发性能
 
 **监控器系统**
@@ -201,13 +197,13 @@ ebpf/
 
 | 监控器 | 功能描述 | eBPF机制 | 输出字段 |
 |-------|---------|---------|----------|
-| **exec** | 进程执行监控 | syscalls tracepoint | 时间戳、进程名、UID、PID、PPID、返回值、命令参数 |
-| **func** | 内核函数监控 | kprobe | 时间戳、进程信息、函数名 |
-| **syscall** | 系统调用监控 | raw_syscalls tracepoint | 系统调用号、分类、持续时间、返回值、错误状态 |
-| **io** | I/O 操作监控 | syscalls tracepoint | I/O类型、文件描述符、大小、持续时间、吞吐量、错误状态 |
-| **open** | 文件打开监控 | syscalls tracepoint | 文件路径、打开标志、权限、返回值、操作类型 |
-| **interrupt** | 中断监控 | irq/softirq tracepoint | 中断号、类型、持续时间、CPU、中断名称 |
-| **page_fault** | 页面错误监控 | exceptions tracepoint | 内存地址、错误类型、进程信息、CPU |
+| **exec** | 进程执行监控 | kprobe | 时间戳、进程名、UID、PID、命令参数 |
+| **open** | 文件打开监控 | tracepoint | 进程信息、文件路径、打开标志、操作类型、操作延迟 |
+| **bio** | 块 I/O 操作监控 | tracepoint | 进程信息、I/O类型、操作延迟、吞吐量 |
+| **syscall** | 系统调用监控 | tracepoint | 进程信息、系统调用号、分类、数量、错误状态 |
+| **func** | 内核函数监控 | kprobe | 进程信息、函数名、数量 |
+| **interrupt** | 中断监控 | tracepoint | 中断名称、类型、CPU、数量 |
+| **page_fault** | 页面错误监控 | tracepoint | 进程信息、错误类型、CPU、NUMA、数量 |
 
 ### 监控器详细说明
 
@@ -306,6 +302,16 @@ ebpf/
     monitor_kernel_faults: false  # 监控内核空间错误
   ```
 
+**ContextSwitchMonitor（上下文切换监控）**
+- **机制**：使用 `sched:sched_switch` tracepoint
+- **特点**：监控进程/线程上下文切换，分析CPU调度性能
+- **应用场景**：CPU调度分析、性能优化、延迟诊断
+- **配置示例**：
+  ```yaml
+  context_switch:
+    enabled: true
+  ```
+
 ## ⚙️ 配置管理
 
 ### 配置文件结构
@@ -344,6 +350,16 @@ output:
   flush_interval: 2.0      # 刷新间隔（秒）
   csv_delimiter: ","       # CSV分隔符
   include_header: true     # 是否包含表头
+
+# 性能调优配置
+performance:
+  output_batch_size: 1000           # 输出批处理大小
+  large_batch_threshold: 20         # 大批次阈值（触发立即刷盘）
+  monitor_thread_timeout: 5.0       # 监控线程join超时时间（秒）
+  daemon_stop_timeout: 10           # 守护进程停止超时时间（秒）
+  stats_timer_timeout: 2.0          # 统计定时器join超时时间（秒）
+  output_thread_sleep: 0.1          # 输出线程休眠时间（秒）
+  bpf_poll_timeout: 1000            # BPF轮询超时时间（毫秒）
 
 # 监控器配置
 monitors:
@@ -405,9 +421,22 @@ monitors:
 ### 配置特点
 
 - **动态配置发现**：监控器配置通过 `MonitorsConfig` 自动发现
-- **类型安全验证**：使用 dataclass 确保配置类型正确
+- **类型安全验证**：使用配置类确保配置类型正确
 - **默认值支持**：每个监控器提供合理的默认配置
 - **错误处理**：详细的配置验证和错误报告
+
+### Python 2.7 兼容性说明
+
+本项目完全兼容 Python 2.7，采用以下兼容性策略：
+
+- **类型注解**：使用注释形式的类型提示（`# type: ...`），不影响Python 2.7运行
+- **pathlib**：提供Python 2.7兼容的Path实现（`src/utils/py2_compat.py`）
+- **字符串格式化**：统一使用`.format()`方法而非f-string
+- **异常处理**：兼容Python 2.7的异常类型（如使用`IOError`而非`FileNotFoundError`）
+- **字典操作**：使用`.items()`而非`.iteritems()`
+- **导入处理**：所有Python 3特性都有Python 2.7降级方案
+
+**推荐使用Python 3.7+以获得更好的性能和类型检查支持，但Python 2.7环境下也能正常运行。**
 
 ## 📄 输出数据格式
 
@@ -593,9 +622,14 @@ output:
 ```bash
 # 只启用必要的监控器
 sudo python3 main.py -m exec
+```
 
-# 针对特定目标
-sudo python3 main.py -p nginx,mysql
+**性能参数调优**
+```yaml
+# config/monitor_config.yaml
+performance:
+  output_batch_size: 2000           # 增大批处理大小
+  bpf_poll_timeout: 500             # 减少轮询超时
 ```
 
 ## 📚 相关文档
@@ -611,8 +645,8 @@ sudo python3 main.py -p nginx,mysql
 
 遇到问题时请按以下步骤排查：
 
-1. 查看 [故障排除](#🐛-故障排除) 章节
-2. 检查运行日志：`tail -f logs/monitor.log`
+1. 查看相应方案的故障排除章节
+2. 检查运行日志
 3. 在 GitHub Issues 中提交问题报告
 
 ---

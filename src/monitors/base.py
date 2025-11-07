@@ -7,51 +7,35 @@ eBPF监控器基类
 子类只需实现特定的抽象方法即可快速创建新的监控器。
 """
 
-import ctypes as ct
+# 标准库导入
 import time
+from threading import Thread, Event
+
+# 兼容性导入
 try:
-    from abc import ABC, abstractmethod
+    from abc import ABC
 except ImportError:
-    # Python 2.7 fallback
-    from abc import ABCMeta, abstractmethod
-    ABC = ABCMeta('ABC', (object,), {})
+    from ..utils.py2_compat import ABC
 try:
     from pathlib import Path
 except ImportError:
-    # Python 2.7 fallback
     from ..utils.py2_compat import Path
-from threading import Thread, Event
-# 兼容性导入
 try:
-    from typing import Dict, List, Any, TYPE_CHECKING
+    from typing import Dict, List, Any
 except ImportError:
-    from ..utils.py2_compat import Dict, List, Any, TYPE_CHECKING
+    from ..utils.py2_compat import Dict, List, Any
 
-import psutil
+# 第三方库导入
 try:
     # noinspection PyUnresolvedReferences
     from bpfcc import BPF  # pyright: ignore[reportMissingImports]
 except ImportError:
-    # Python 2.7 fallback
     from bcc import BPF  # pyright: ignore[reportMissingImports]
 
+# 本地模块导入
 from ..utils.data_processor import DataProcessor
 from ..utils.decorators import MONITOR_REGISTRY, require_bpf_loaded
-
-if TYPE_CHECKING:
-    # noinspection PyUnusedImports
-    from ..utils.application_context import ApplicationContext
-
-
-class BaseEvent(ct.Structure):
-    """
-    事件基类
-
-    用于定义eBPF事件的数据结构，子类需要定义_fields_
-    """
-    _fields_ = [
-        ("timestamp", ct.c_uint64)  # 时间戳
-    ]
+from ..utils.monitor_context import MonitorContext
 
 
 class BaseMonitor(ABC):
@@ -64,42 +48,77 @@ class BaseMonitor(ABC):
     BaseMonitor.validate_config(config)  # 解析、验证配置
     monitor = BaseMonitor(config)        # 初始化监控器
     monitor.load_ebpf_program()          # 加载eBPF程序
-    monitor.add_target_process(1234)     # 添加目标进程
-    monitor.add_target_user(1000)        # 添加目标用户
     monitor.run()                        # 开始监控
     monitor.stop()                       # 停止监控
     monitor.cleanup()                    # 清理资源
     """
-    # 事件类型，子类必须实现
-    EVENT_TYPE = BaseEvent  # type: type
-
     # 需要验证的tracepoint，子类可以重写
     REQUIRED_TRACEPOINTS = []  # type: List[str]
+
+    MONITOR_THREAD_TIMEOUT = 5.0
 
     @classmethod
     def get_default_config(cls):
         # type: () -> Dict[str, Any]
         """
         获取监控器默认配置
-        
-        子类必须实现此方法来提供默认配置
-        
+
         Returns:
             Dict[str, Any]: 默认配置字典
         """
-        return {"enabled": True}
+        base_config = {
+            "enabled": True,
+            "interval": 2,
+        }
+        base_config.update(cls.get_default_monitor_config())
+        return base_config
+
+    @classmethod
+    def get_default_monitor_config(cls):
+        # type: () -> Dict[str, Any]
+        """
+        获取监控器默认配置
+
+        子类可以重写此方法来提供特定的默认配置
+
+        Returns:
+            Dict[str, Any]: 默认配置字典
+        """
+        return {}
 
     @classmethod
     def validate_config(cls, config):
         # type: (Dict[str, Any]) -> None
         """
         验证监控器配置
+        
+        Args:
+            config: 监控器配置字典
+            
+        Raises:
+            ValueError: 配置验证失败时抛出
         """
-        assert config is not None, "监控器配置不能为空"
-        assert isinstance(config, dict), "监控器配置必须为字典"
-        assert len(config) > 0, "监控器配置不能为空"
-        assert config.get("enabled") is not None, "enabled不能为空"
-        assert isinstance(config.get("enabled"), bool), "enabled必须为布尔值"
+        if config is None:
+            raise ValueError("监控器配置不能为空")
+        if not isinstance(config, dict):
+            raise ValueError("监控器配置必须为字典，当前类型: {}".format(type(config).__name__))
+        if len(config) == 0:
+            raise ValueError("监控器配置不能为空字典")
+        if config.get("enabled") is None:
+            raise ValueError("配置中缺少必需字段: enabled")
+        if not isinstance(config.get("enabled"), bool):
+            raise ValueError("enabled 必须为布尔值，当前类型: {}".format(type(config.get("enabled")).__name__))
+
+        if not config.get("enabled"):
+            return  # 如果监控器未启用，则跳过验证
+
+        if config.get("interval") is None:
+            raise ValueError("监控器配置中缺少必需字段: interval")
+        if not isinstance(config.get("interval"), (int, float)):
+            raise ValueError("interval 必须为数字，当前类型: {}".format(type(config.get("interval")).__name__))
+        if config.get("interval") <= 0:
+            raise ValueError("interval 必须大于 0，当前值: {}".format(config.get("interval")))
+
         cls.validate_monitor_config(config)
 
     @classmethod
@@ -131,111 +150,48 @@ class BaseMonitor(ABC):
                 return _type
         raise ValueError("监控器类 {} 未在注册表中找到".format(cls.__name__))
 
-    def __init__(self, context, config):
-        # type: ('ApplicationContext', Dict[str, Any]) -> None
+    def __init__(self, monitor_context, config):
+        # type: (MonitorContext, Dict[str, Any]) -> None
         """
         初始化监控器基类
         
         Args:
-            context: 应用上下文（可选，用于依赖注入）
-            config: 监控器配置
+            monitor_context: 监控器上下文,包含所有必要的依赖
+            config: 监控器配置字典
         """
-        self.context = context
-        self.base_logger = context.get_logger(BaseMonitor.__name__)  # 基类logger
-        self.logger = context.get_logger(self)  # 子类的logger
+        # 从monitor_context提取依赖
+        self.logger = monitor_context.logger
+        self.output_controller = monitor_context.output_controller
+        self.ebpf_file = monitor_context.ebpf_file_path
+        self.compile_flags = monitor_context.compile_flags
 
-        self.config_manager = context.config_manager  # 配置管理器
-        self.output_controller = context.output_controller  # 输出控制器
-        self.capability_checker = context.get_capability_checker()  # 内核兼容性检查器
+        # 基本属性
+        self.type = self.get_monitor_type()
+        self.stats_name = "{}_stats".format(self.type)
+        self.bpf = None
 
-        self.debug = self.config_manager.app_config.debug  # 调试模式
-        self.type = self.get_monitor_type()  # 监控器名称
-        self.events_name = "{}_events".format(self.type)  # 事件缓冲区名称
-        self.ebpf_file = self.__get_ebpf_file()  # eBPF程序文件路径
-        self.bpf = None  # eBPF程序实例
-        self.boot_time = psutil.boot_time()  # 系统启动时间
-
-        self.target_pids = {}  # type: Dict[int, str]  # 目标进程管理
-        self.target_uids = {}  # type: Dict[int, str]  # 目标用户管理
-
-        self.running = False  # 监控运行状态
-        self.stop_event = Event()  # 监控停止事件flag
-        self.monitor_thread = None  # 监控线程
-
-        # 统计数据（基础字段）
-        self.stats = self.__get_default_stats()
+        # 运行状态
+        self.running = False
+        self.stop_event = Event()  # type: Event
+        # noinspection PyTypeChecker
+        self.monitor_thread = None  # type: Thread
 
         # 验证内核要求和依赖
         self._validate_requirements()
 
+        # 从config提取配置
+        self.enabled = config.get("enabled")  # type: bool
+
+        if not self.enabled:
+            self.logger.debug("[BaseMonitor] {}监控器未启用".format(self.__class__.__name__))
+            return
+
+        self.interval = config.get("interval")  # type: float
+
         # 应用配置
-        self.enabled = config.get("enabled")
         self._initialize(config)
 
-    def __get_ebpf_file(self):  # 子类不可重写
-        # type: () -> Path
-        """
-        获取eBPF程序文件路径
-
-        根据 @register_monitor 装饰器的参数自动构建路径：
-        ebpf_dir / {monitor_type}.c
-
-        Returns:
-            Path: eBPF程序文件路径
-
-        Raises:
-            IOError: 当eBPF文件不存在时
-            ValueError: 当监控器未注册时
-        """
-        # 构建eBPF文件路径
-        ebpf_file = self.config_manager.get_ebpf_dir() / "{}.c".format(self.type)
-        self.base_logger.debug("自动确定eBPF文件路径: {} (基于监控器名称: {})".format(ebpf_file, self.type))
-
-        if not ebpf_file.exists():
-            raise IOError("eBPF程序文件不存在: {}".format(ebpf_file))
-
-        return ebpf_file
-
-    @staticmethod
-    def __get_default_stats():  # 子类不可重写
-        # type: () -> Dict[str, Any]
-        """
-        获取默认统计数据结构
-
-        Returns:
-            Dict[str, Any]: 默认统计数据字典
-        """
-        return {
-            "events_processed": 0,
-            "events_dropped": 0,
-            "last_reset": time.time()
-        }
-
-    def get_statistics(self):
-        # type: () -> Dict[str, Any]
-        """
-        获取统计信息
-
-        子类可以重写此方法来扩展统计信息
-
-        Returns:
-            Dict[str, Any]: 统计信息
-        """
-        stats = self.stats.copy()
-
-        # 添加通用信息
-        stats["monitoring"] = self.running
-        stats["target_processes"] = self.target_pids.copy()
-        stats["target_users"] = self.target_uids.copy()
-
-        return stats
-
-    def reset_statistics(self):
-        # type: () -> None
-        """重置统计信息"""
-        # 重置基础统计
-        self.stats.update(self.__get_default_stats())
-        self.base_logger.info("{}统计信息已重置".format(self.__class__.__name__))
+        self.logger.debug("[BaseMonitor] {}监控器初始化完成".format(self.__class__.__name__))
 
     def _validate_requirements(self):
         # type: () -> None
@@ -245,11 +201,11 @@ class BaseMonitor(ABC):
         子类可以重写此方法来验证特定的内核功能
         """
         for tp in self.REQUIRED_TRACEPOINTS:
-            tp_path = "/sys/kernel/debug/tracing/events/{}/enable".format(tp.replace(':', '/'))
+            tp_path = "/sys/kernel/debug/tracing/events/{}/enable".format(tp.replace(":", "/"))
             if not Path(tp_path).exists():
-                tp_path = "/sys/kernel/tracing/events/{}/enable".format(tp.replace(':', '/'))
+                tp_path = "/sys/kernel/tracing/events/{}/enable".format(tp.replace(":", "/"))
                 if not Path(tp_path).exists():
-                    self.logger.warning("Tracepoint {} 可能不可用".format(tp))
+                    self.logger.warning("[BaseMonitor] Tracepoint {} 可能不可用".format(tp))
 
     def _initialize(self, config):
         # type: (Dict[str, Any]) -> None
@@ -271,23 +227,22 @@ class BaseMonitor(ABC):
             bool: 加载是否成功
         """
         if not self.enabled:
-            self.base_logger.warning("{}监控未启用".format(self.__class__.__name__))
+            self.logger.warning("[BaseMonitor] {}监控未启用".format(self.__class__.__name__))
             return False
 
         try:
-            # 获取编译标志
-            flags = self.capability_checker.get_compile_flags()
-            self.base_logger.debug("加载eBPF程序: {}, 编译标志: {}".format(self.ebpf_file, flags))
+            # 使用传入的编译标志
+            self.logger.debug("[BaseMonitor] 加载eBPF程序: {}, 编译标志: {}".format(self.ebpf_file, self.compile_flags))
 
             # 编译和加载eBPF程序
-            self.bpf = BPF(text=self._get_ebpf_code(), cflags=flags)
+            self.bpf = BPF(text=self._get_ebpf_code(), cflags=self.compile_flags)
             # 配置程序
             self._configure_ebpf_program()
 
-            self.base_logger.info("{} eBPF程序加载成功".format(self.__class__.__name__))
+            self.logger.info("[BaseMonitor] {} eBPF程序加载成功".format(self.__class__.__name__))
             return True
         except Exception as e:
-            self.base_logger.error("{} eBPF程序加载失败: {}".format(self.__class__.__name__, e))
+            self.logger.error("[BaseMonitor] {} eBPF程序加载失败: {}".format(self.__class__.__name__, e))
             return False
 
     def _get_ebpf_code(self):
@@ -319,131 +274,127 @@ class BaseMonitor(ABC):
             bool: 启动是否成功
         """
         if self.running:
-            self.base_logger.warning("{}监控已经在运行".format(self.__class__.__name__))
+            self.logger.warning("[BaseMonitor] {}监控器已经在运行".format(self.__class__.__name__))
             return True
 
         try:
-            # 绑定事件处理函数
-            self.bpf[self.events_name].open_perf_buffer(self.__handle_event_callback)
-
-            # 启动监控线程
+            # 启动统计定时器线程
             self.stop_event.clear()
-            self.monitor_thread = Thread(target=self.__monitor_loop)
-            # Python 2.7兼容性：设置daemon属性而不是在__init__中传递
+            self.monitor_thread = Thread(target=self._monitor_loop)
             self.monitor_thread.daemon = True
             self.monitor_thread.start()
 
             self.running = True
-            self.base_logger.info("{}监控开始".format(self.__class__.__name__))
+            self.logger.info("[BaseMonitor] {}监控器启动成功".format(self.__class__.__name__))
             return True
         except Exception as e:
-            self.base_logger.error("启动{}监控失败: {}".format(self.__class__.__name__, e))
+            self.logger.error("[BaseMonitor] 启动{}监控器失败: {}".format(self.__class__.__name__, e))
             return False
 
-    def __monitor_loop(self):
+    def _monitor_loop(self):
         """监控循环"""
         while not self.stop_event.is_set():
+            # 等待指定的统计周期
+            if self.stop_event.wait(self.interval):
+                break  # 收到停止信号
+
             try:
-                # 轮询事件，超时1秒
-                self.bpf.perf_buffer_poll(timeout=1000)
+                self._collect_and_output()
             except Exception as e:
-                if not self.stop_event.is_set():
-                    self.base_logger.error("事件轮询失败: {}".format(e))
-                    time.sleep(1)
+                self.logger.error("[BaseMonitor] 收集统计数据失败: {}".format(e))
 
     @require_bpf_loaded
     def stop(self):
         """停止监控"""
         if not self.running:
-            self.base_logger.warning("{}监控未运行".format(self.__class__.__name__))
+            self.logger.warning("[BaseMonitor] {}监控器未运行".format(self.__class__.__name__))
             return
 
-        self.base_logger.info("正在停止{}监控...".format(self.__class__.__name__))
+        self.logger.info("[BaseMonitor] 正在停止{}监控...".format(self.__class__.__name__))
         self.stop_event.set()
 
-        if self.monitor_thread and self.monitor_thread.is_alive():
-            self.monitor_thread.join(timeout=5.0)
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=self.MONITOR_THREAD_TIMEOUT)
 
         self.running = False
-        self.base_logger.info("{}监控已停止".format(self.__class__.__name__))
+        self.logger.info("[BaseMonitor] {}监控器已停止".format(self.__class__.__name__))
+
+    def _collect_and_output(self):
+        """收集并输出统计数据（原子读取并删除）"""
+        try:
+            monitor_stats = self.bpf.get_table(self.stats_name)
+        except Exception as e:
+            self.logger.error("[BaseMonitor] 获取统计信息失败: {}".format(e))
+            return
+
+        # 收集所有统计数据（使用原子的 pop 操作避免竞态条件）
+        stats_list = []
+
+        # 先获取所有 key（快照）
+        keys_to_process = list(monitor_stats.keys())
+
+        # 逐个原子地读取并删除
+        for key in keys_to_process:
+            try:
+                # pop() 是原子操作：读取并删除
+                value = monitor_stats.pop(key)
+                if self.should_collect(key, value):
+                    # Python 2兼容：dict无法使用多个**解包，使用update()代替
+                    stat_data = {"timestamp": time.time()}
+                    stat_data.update(DataProcessor.struct_to_dict(key))
+                    stat_data.update(DataProcessor.struct_to_dict(value))
+                    stats_list.append(stat_data)
+            except KeyError:
+                # key 在获取快照后被删除或不存在，跳过
+                continue
+            except Exception as e:
+                self.logger.warning("[BaseMonitor] 处理统计条目失败: {}".format(e))
+                continue
+
+        if not stats_list:
+            return  # 没有数据，不输出
+
+        for stat in stats_list:
+            # 通过输出控制器输出
+            self.output_controller.handle_data(self.type, stat)
 
     # noinspection PyUnusedLocal
-    def __handle_event_callback(self, cpu, data, size):
+    def should_collect(self, key, value):
         """
-        处理具体的事件数据
+        判断是否应该收集数据
 
-        处理从eBPF程序接收到的事件数据
+        子类可以重写此方法来提供特定的数据过滤逻辑
 
         Args:
-            cpu: 产生事件的CPU编号
-            data: 事件数据指针
-            size: 事件数据大小
-        """
-        try:
-            event = ct.cast(data, ct.POINTER(self.EVENT_TYPE)).contents
-            if not self._should_handle_event(event):
-                return
-            self.output_controller.handle_event(self.type, event)
-            self._handle_event_extended_callback(event)
-            self.stats["events_processed"] += 1
-        except Exception as e:
-            self.base_logger.error("处理事件失败: {}".format(e))
-            self.stats["events_dropped"] += 1
-
-    def _should_handle_event(self, event):
-        # type: (BaseEvent) -> bool
-        """
-        判断是否应该处理事件
-
-        Args:
-            event: 事件数据对象
+            key: 键
+            value: 值
 
         Returns:
-            bool: 是否应该处理事件
-
-        子类可以重写此方法来判断是否应该处理事件
+            bool: 是否应该收集数据
         """
         return True
 
-    def _handle_event_extended_callback(self, event):
-        # type: (BaseEvent) -> None
-        """
-        处理扩展事件
-
-        子类可以重写此方法来处理特定的扩展事件
-        """
-        pass
-
-    def _convert_timestamp(self, event):
-        # type: (BaseEvent) -> Any
-        """
-        将内核时间戳转换为Unix时间戳
-        """
-        return self._convert_timestamp_ns(event.timestamp)
-
-    def _convert_timestamp_ns(self, timestamp):
-        # type: (int) -> Any
-        """
-        将纳秒时间戳转换为Unix时间戳
-        """
-        return self.boot_time + timestamp / 1e9
-
     def cleanup(self):
-        """清理资源"""
+        """清理资源（幂等操作）"""
         # cleanup职责：仅清理资源，不负责停止监控
         # 调用者应该先调用stop()再调用cleanup()
+        # 此方法可以安全地多次调用
+
+        # 检查是否已清理
+        if getattr(self, "_cleaned_up", False):
+            self.logger.debug("[BaseMonitor] {} 资源已清理，跳过重复清理".format(self.__class__.__name__))
+            return
+
         if self.bpf is not None:
             try:
-                # 清理目标进程
-                self.bpf["target_pids"].clear()
-                self.bpf["target_uids"].clear()
+                # 清理BPF对象
                 self.bpf.cleanup()
-                self.base_logger.info("{} eBPF资源清理完成".format(self.__class__.__name__))
+                self.logger.debug("[BaseMonitor] {}监控器eBPF资源清理完成".format(self.type))
             except Exception as e:
-                self.base_logger.error("{} eBPF资源清理失败: {}".format(self.__class__.__name__, e))
+                self.logger.error("[BaseMonitor] {}监控器eBPF资源清理失败: {}".format(self.type, e))
 
-        self.target_pids.clear()
-        self.target_uids.clear()
+        # 标记已清理
+        self._cleaned_up = True
 
     def is_running(self):
         # type: () -> bool
@@ -456,9 +407,8 @@ class BaseMonitor(ABC):
         return self.running
 
     # ==================== 格式化方法接口 ====================
-    # 这些方法可以被子类重写以提供自定义的输出格式
+    # 允许子类重写以提供自定义的输出格式
 
-    @abstractmethod
     def get_csv_header(self):
         # type: () -> List[str]
         """
@@ -469,33 +419,61 @@ class BaseMonitor(ABC):
         Returns:
             List[str]: CSV头部字段列表
         """
-        return ['timestamp', 'time_str', 'data']
+        return ["timestamp", "time_str"] + self.monitor_csv_header()
 
-    @abstractmethod
-    def format_for_csv(self, event_data):
-        # type: (BaseEvent) -> Dict[str, Any]
+    def monitor_csv_header(self):
+        # type: () -> List[str]
+        """
+        获取监控器CSV头部字段
+
+        Returns:
+            List[str]: CSV头部字段列表
+        """
+        return []
+
+    def format_for_csv(self, data):
+        # type: (Dict[str, Any]) -> Dict[str, Any]
         """
         将事件数据格式化为CSV行数据
 
-        子类需要重写此方法以提供特定的CSV格式化逻辑
-
         Args:
-            event_data: 事件数据对象
+            data: 数据
 
         Returns:
             Dict[str, Any]: CSV行数据字典
         """
-        timestamp = self._convert_timestamp(event_data)
-        time_str = DataProcessor.format_timestamp(timestamp)
+        timestamp = data["timestamp"]
+        return dict({
+            "timestamp": timestamp,
+            "time_str": DataProcessor.format_timestamp(timestamp)
+        }, **self.monitor_csv_data(data))
 
-        return {
-            'timestamp': timestamp,
-            'time_str': time_str,
-            'data': str(event_data)
-        }
+    def monitor_csv_data(self, data):
+        # type: (Dict[str, Any]) -> Dict[str, Any]
+        """
+        将事件数据格式化为CSV行数据
 
-    @abstractmethod
+        子类需要重写此方法以提供特定的CSV数据格式化逻辑
+
+        Args:
+            data: 数据
+
+        Returns:
+            Dict[str, Any]: CSV行数据字典
+        """
+        return {k: v for k, v in data.items() if k not in ["timestamp", "time_str"]}
+
     def get_console_header(self):
+        # type: () -> str
+        """
+        获取控制台输出的表头
+
+        Returns:
+            str: 格式化后的控制台表头字符串
+        """
+        return "{:<22} {}".format("TIME", self.monitor_console_header())
+
+    def monitor_console_header(self):
         # type: () -> str
         """
         获取控制台输出的表头
@@ -503,25 +481,38 @@ class BaseMonitor(ABC):
         子类需要重写此方法以提供特定的控制台表头格式
 
         Returns:
-            str: 格式化后的控制台表头字符串
+            str: 控制台表头字符串
         """
-        return "{:<22} {}".format('TIME', 'DATA')
+        return ""
 
-    @abstractmethod
-    def format_for_console(self, event_data):
-        # type: (BaseEvent) -> str
+    def format_for_console(self, data):
+        # type: (Dict[str, Any]) -> str
         """
         将事件数据格式化为控制台输出
 
-        子类需要重写此方法以提供特定的控制台格式化逻辑
-
         Args:
-            event_data: 事件数据对象
+            data: 数据
 
         Returns:
             str: 格式化后的控制台输出字符串
         """
-        timestamp = self._convert_timestamp(event_data)
+        timestamp = data["timestamp"]
         time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
 
-        return "{:<22} {}".format(time_str, str(event_data))
+        return "{:<22} {}".format(time_str, self.monitor_console_data(data))
+
+    # noinspection PyUnusedLocal
+    def monitor_console_data(self, data):
+        # type: (Dict[str, Any]) -> str
+        """
+        将事件数据格式化为控制台输出
+
+        子类需要重写此方法以提供特定的控制台数据格式化逻辑
+
+        Args:
+            data: 数据
+
+        Returns:
+            str: 格式化后的控制台输出字符串
+        """
+        return ""

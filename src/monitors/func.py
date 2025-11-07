@@ -6,48 +6,34 @@
 监控指定模式的内核函数调用。
 """
 
-import ctypes as ct
+# 标准库导入
 import re
+
+# 兼容性导入
 try:
     from pathlib import Path
 except ImportError:
-    # Python 2.7 fallback
     from ..utils.py2_compat import Path
 try:
     from typing import Dict, List, Any
 except ImportError:
-    # Python 2.7 fallback
-    Dict = dict
-    List = list
-    Any = object
+    from ..utils.py2_compat import Dict, List, Any
 
-from .base import BaseEvent, BaseMonitor
-from ..utils.data_processor import DataProcessor
+# 本地模块导入
+from .base import BaseMonitor
 from ..utils.decorators import register_monitor
-
-
-class FuncEvent(BaseEvent):
-    """内核函数调用事件"""
-    _fields_ = [
-        ("pid", ct.c_uint32),  # 进程ID
-        ("ppid", ct.c_uint32),  # 父进程ID
-        ("uid", ct.c_uint32),  # 用户ID
-        ("func_id", ct.c_uint32),  # 函数ID
-        ("comm", ct.c_char * 16),  # 进程名
-    ]
+from ..utils.py2_compat import compat_super
 
 
 @register_monitor("func")
 class FuncMonitor(BaseMonitor):
     """内核函数监控器"""
-    EVENT_TYPE = FuncEvent  # type: type
 
     @classmethod
-    def get_default_config(cls):
+    def get_default_monitor_config(cls):
         # type: () -> Dict[str, Any]
         """获取func监控器默认配置"""
         return {
-            "enabled": True,
             "patterns": ["vfs_*"],  # 匹配模式
             "probe_limit": 10  # 最大探针数量
         }
@@ -55,14 +41,29 @@ class FuncMonitor(BaseMonitor):
     @classmethod
     def validate_monitor_config(cls, config):
         # type: (Dict[str, Any]) -> None
-        """验证func监控器配置"""
-        assert config.get("patterns") is not None, "patterns不能为空"
-        assert isinstance(config.get("patterns"), list), "patterns必须为列表"
-        assert len(config.get("patterns")) > 0, "patterns列表不能为空"
-        assert config.get("probe_limit") is not None, "probe_limit不能为空"
-        assert isinstance(config.get("probe_limit"), int), "probe_limit必须为整数"
-        assert config.get("probe_limit") >= 1, "probe_limit必须大于等于1"
-        assert config.get("probe_limit") <= 100, "probe_limit必须小于等于100"
+        """
+        验证func监控器配置
+        
+        Args:
+            config: 监控器配置字典
+            
+        Raises:
+            ValueError: 配置验证失败时抛出
+        """
+        if config.get("patterns") is None:
+            raise ValueError("func监控配置中缺少必需字段: patterns")
+        if not isinstance(config.get("patterns"), list):
+            raise ValueError("patterns 必须为列表，当前类型: {}".format(type(config.get("patterns")).__name__))
+        if len(config.get("patterns")) == 0:
+            raise ValueError("patterns 列表不能为空")
+        if config.get("probe_limit") is None:
+            raise ValueError("func监控配置中缺少必需字段: probe_limit")
+        if not isinstance(config.get("probe_limit"), int):
+            raise ValueError("probe_limit 必须为整数，当前类型: {}".format(type(config.get("probe_limit")).__name__))
+        if config.get("probe_limit") < 1:
+            raise ValueError("probe_limit 必须大于等于 1，当前值: {}".format(config.get("probe_limit")))
+        if config.get("probe_limit") > 100:
+            raise ValueError("probe_limit 必须小于等于 100，当前值: {}".format(config.get("probe_limit")))
 
     def _validate_requirements(self):
         """验证内核函数监控要求"""
@@ -73,9 +74,8 @@ class FuncMonitor(BaseMonitor):
         # type: (Dict[str, Any]) -> None
         """初始化内核函数监控器"""
         # 应用配置
-        self.enabled = config.get("enabled") #type: bool
         self.patterns = config.get("patterns")  # type: List[str]
-        self.probe_limit = config.get("probe_limit") # type: int
+        self.probe_limit = config.get("probe_limit")  # type: int
 
         # 查找匹配的函数
         self.matched_functions = self._find_matching_functions()  # type: Dict[int, str]
@@ -88,15 +88,15 @@ class FuncMonitor(BaseMonitor):
 
         k_all_syms_path = "/proc/kallsyms"
         # 读取可用的内核函数列表
-        with open(k_all_syms_path, 'r') as f:
+        with open(k_all_syms_path, "r") as f:
             for line in f:
                 parts = line.strip().split()
                 if len(parts) >= 3:
                     # 格式: address type name [module]
                     symbol_type, symbol_name = parts[1], parts[2]
 
-                    # 只关注内核函数 (type 'T' 或 't')
-                    if symbol_type.lower() == 't':
+                    # 只关注内核函数 (type "T" 或 "t")
+                    if symbol_type.lower() == "t":
                         # 检查是否匹配任何模式
                         for pattern in self.patterns:
                             if self._match_pattern(symbol_name, pattern):
@@ -112,12 +112,11 @@ class FuncMonitor(BaseMonitor):
         self.logger.debug("匹配的函数: {}".format(matched))
         return matched
 
-    @staticmethod
-    def _match_pattern(symbol_name, pattern):
+    def _match_pattern(self, symbol_name, pattern):
         # type: (str, str) -> bool
         """检查符号名是否匹配模式"""
         # 将shell风格的通配符转换为正则表达式
-        regex_pattern = "^{}$".format(pattern.replace('*', '.*').replace('?', '.'))
+        regex_pattern = "^{}$".format(pattern.replace("*", ".*").replace("?", "."))
         try:
             return bool(re.match(regex_pattern, symbol_name))
         except re.error:
@@ -129,19 +128,14 @@ class FuncMonitor(BaseMonitor):
         if not self.matched_functions:
             raise RuntimeError("没有匹配的函数")
 
-        # 读取eBPF模板文件
-        try:
-            with open(str(self.ebpf_file), 'r') as f:
-                template_code = f.read()
-        except Exception as e:
-            raise RuntimeError("读取eBPF模板文件失败: {}".format(e))
+        template_code = compat_super(FuncMonitor, self)._get_ebpf_code()
 
         # 生成探针函数代码
         probe_functions = ""
         for func_id in self.matched_functions.keys():
             probe_functions += '''
-int trace_func_{func_id}(struct pt_regs *ctx) {{
-    submit_func_event(ctx, {func_id});
+int trace_func_{func_id} (struct pt_regs *ctx) {{
+    update_func_stats(ctx, {func_id});
     return 0;
 }}
 '''.format(func_id=func_id)
@@ -168,81 +162,31 @@ int trace_func_{func_id}(struct pt_regs *ctx) {{
 
     # ==================== 格式化方法实现 ====================
 
-    def get_csv_header(self):
+    def monitor_csv_header(self):
         # type: () -> List[str]
         """获取CSV头部字段"""
-        return ['timestamp', 'time_str', 'pid', 'ppid', 'uid', 'comm', 'func_name']
+        return ["comm", "func_name", "count"]
 
-    def format_for_csv(self, event_data):
-        # type: (FuncEvent) -> Dict[str, Any]
+    def monitor_csv_data(self, data):
+        # type: (Dict[str, Any]) -> Dict[str, Any]
         """将事件数据格式化为CSV行数据"""
-        timestamp = self._convert_timestamp(event_data)
-        time_str = DataProcessor.format_timestamp(timestamp)
-
         # 处理字节字符串
-        comm = DataProcessor.decode_bytes(event_data.comm)
-        func_name = self.matched_functions.get(event_data.func_id, "unknown_{}".format(event_data.func_id))
+        return {
+            "comm": data["comm"],
+            "func_name": self.matched_functions.get(data["func_id"], "unknown_{}".format(data["func_id"])),
+            "count": data["count"]
+        }
 
-        values = [timestamp, time_str, event_data.pid, event_data.ppid, event_data.uid, comm, func_name]
-
-        return dict(zip(self.get_csv_header(), values))
-
-    def get_console_header(self):
+    def monitor_console_header(self):
         # type: () -> str
         """获取控制台输出的表头"""
-        return "{:<22} {:<8} {:<8} {:<6} {:<16} {}".format('TIME', 'PID', 'PPID', 'UID', 'COMMAND', 'FUNCTION')
+        return "{:<16} {:<32} {}".format("COMMAND", "FUNCTION", "COUNT")
 
-    def format_for_console(self, event_data):
-        # type: (FuncEvent) -> str
+    def monitor_console_data(self, data):
+        # type: (Dict[str, Any]) -> str
         """将事件数据格式化为控制台输出"""
-        absolute_timestamp = self._convert_timestamp(event_data)
-        time_prefix = "[{}]".format(DataProcessor.format_timestamp(absolute_timestamp))
-
-        # 处理字节字符串
-        comm = DataProcessor.decode_bytes(event_data.comm)
-        func_name = self.matched_functions.get(event_data.func_id, "unknown_{}".format(event_data.func_id))
-
-        return "{:<22} {:<8} {:<8} {:<6} {:<16} {}".format(time_prefix, event_data.pid, event_data.ppid, event_data.uid, comm, func_name)
-
-
-if __name__ == "__main__":
-    """测试模式"""
-    import sys
-    import time
-    from ..utils.application_context import ApplicationContext
-
-    context = ApplicationContext()
-
-    logger = context.get_logger("FuncMonitor")
-    logger.info("内核函数监控测试模式")
-
-    monitor = FuncMonitor(context, FuncMonitor.get_default_config())
-
-    output_controller = context.output_controller
-    output_controller.register_monitor("func", monitor)
-
-    if not monitor.load_ebpf_program():
-        logger.error("eBPF程序加载失败")
-        sys.exit(1)
-
-    output_controller.start()
-
-    if not monitor.run():
-        logger.error("内核函数监控启动失败")
-        sys.exit(1)
-
-    logger.info("内核函数监控已启动")
-    logger.info("按 Ctrl+C 停止监控")
-
-    try:
-        while monitor.is_running():
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("")
-        logger.info("用户中断，正在停止监控...")
-    finally:
-        monitor.stop()
-        output_controller.stop()
-        output_controller.unregister_monitor("func")
-        monitor.cleanup()
-        output_controller.cleanup()
+        return "{:<16} {:<32} {}".format(
+            data["comm"],
+            self.matched_functions.get(data["func_id"], "unknown_{}".format(data["func_id"])),
+            data["count"]
+        )
