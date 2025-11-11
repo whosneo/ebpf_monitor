@@ -142,6 +142,7 @@ logs/*.log.*
 
 # 输出文件
 output/*.csv
+output/*/*.csv
 analysis/daily_data/*/*.csv
 analysis/reports/*.txt
 analysis/reports/*/*.txt
