@@ -235,7 +235,7 @@ class BaseMonitor(ABC):
             self.logger.debug("[BaseMonitor] 加载eBPF程序: {}, 编译标志: {}".format(self.ebpf_file, self.compile_flags))
 
             # 编译和加载eBPF程序
-            self.bpf = BPF(text=self._get_ebpf_code(), cflags=self.compile_flags)
+            self.bpf = BPF(text=self.get_ebpf_code(), cflags=self.compile_flags)
             # 配置程序
             self._configure_ebpf_program()
 
@@ -245,7 +245,7 @@ class BaseMonitor(ABC):
             self.logger.error("[BaseMonitor] {} eBPF程序加载失败: {}".format(self.__class__.__name__, e))
             return False
 
-    def _get_ebpf_code(self):
+    def get_ebpf_code(self):
         # type: () -> str
         """
         获取eBPF程序代码

@@ -121,7 +121,7 @@ class FuncMonitor(BaseMonitor):
         except re.error:
             return False
 
-    def _get_ebpf_code(self):
+    def get_ebpf_code(self):
         # type: () -> str
         """基于模板生成动态eBPF程序"""
         if not self.matched_functions:
