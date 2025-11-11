@@ -22,7 +22,6 @@ except ImportError:
 # 本地模块导入
 from .base import BaseMonitor
 from ..utils.decorators import register_monitor
-from ..utils.py2_compat import compat_super
 
 
 @register_monitor("func")
@@ -128,7 +127,7 @@ class FuncMonitor(BaseMonitor):
         if not self.matched_functions:
             raise RuntimeError("没有匹配的函数")
 
-        template_code = compat_super(FuncMonitor, self)._get_ebpf_code()
+        template_code = super(FuncMonitor, self).get_ebpf_code()
 
         # 生成探针函数代码
         probe_functions = ""

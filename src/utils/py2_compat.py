@@ -138,15 +138,6 @@ except ImportError:
             os.unlink(self._path)
 
 
-# super()兼容性处理
-def compat_super(cls, instance):
-    """兼容的super()调用"""
-    if PY2:
-        return super(cls, instance)
-    else:
-        return super()
-
-
 # ProcessLookupError兼容性处理
 try:
     ProcessLookupError = ProcessLookupError
@@ -247,8 +238,6 @@ def safe_clear_collection(collection):
 __all__ = [
     'PY2', 'PY3', 'TYPE_CHECKING',
     'Dict', 'List', 'Any', 'Optional', 'Union', 'Type', 'Callable', 'Tuple', 'TextIO',
-    'Path', 'HAS_PATHLIB',
-    'Enum', 'ABC',
-    'compat_super', 'safe_clear_collection',
-    'ProcessLookupError'
+    'Path', 'HAS_PATHLIB', 'Enum', 'ABC',
+    'safe_clear_collection', 'ProcessLookupError'
 ]
