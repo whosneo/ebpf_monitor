@@ -79,7 +79,7 @@ def parse_arguments():
         "-m",
         "--monitors",
         type=str,
-        help="监控器列表，用逗号分隔 (例如: exec,func,syscall,open,io,interrupt,io,memory)",
+        help="监控器列表，用逗号分隔 (例如: exec,func,syscall,open,bio,interrupt,memory)",
     )
     parser.add_argument(
         "-d",
