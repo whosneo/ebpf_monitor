@@ -141,13 +141,22 @@ process_open_line() {
     # 路径归类（多个模式）+ 字段精简（只保留前8个字段）
     # 使用-E选项支持扩展正则表达式（兼容macOS和Linux）
     sed -E \
+        -e 's|/home/czce/ats/zmb/topic/[0-9]+/[0-9]{20}\.|/home/czce/ats/zmb/topic/[TOPIC_ID]/*.|g' \
+        -e 's|/home/czce/ats/zmb/topic/[0-9]+|/home/czce/ats/zmb/topic/[TOPIC_ID]|g' \
         -e 's|/proc/[0-9]+/|/proc/[PID]/|g' \
+        -e 's|/proc/self/task/[0-9]+/|/proc/self/task/[PID]/|g' \
         -e 's|,[0-9]+/cmdline|,[PID]/cmdline|g' \
         -e 's|,[0-9]+/stat|,[PID]/stat|g' \
         -e 's|/proc/irq/[0-9]+/|/proc/irq/[N]/|g' \
         -e 's|/var/lib/NetworkManager/timestamps\.[a-zA-Z0-9]+|/var/lib/NetworkManager/timestamps.*|g' \
+        -e 's|/usr/local/lib/systemd/system/session-[0-9]+|/usr/local/lib/systemd/system/session-[N]|g' \
+        -e 's|/usr/lib/systemd/system/session-[0-9]+|/usr/lib/systemd/system/session-[N]|g' \
         -e 's|/run/systemd/users/\.#[a-zA-Z0-9]+|/run/systemd/users/.#*|g' \
+        -e 's|/run/systemd/sessions/\.#[a-zA-Z0-9]+|/run/systemd/sessions/.#*|g' \
         -e 's|/run/systemd/sessions/[0-9]+\.ref|/run/systemd/sessions/[N].ref|g' \
+        -e 's|/run/systemd/generator/session-[0-9]+|/run/systemd/generator/session-[N]|g' \
+        -e 's|/run/systemd/generator.late/session-[0-9]+|/run/systemd/generator.late/session-[N]|g' \
+        -e 's|/etc/systemd/system/session-[0-9]+|/etc/systemd/system/session-[N]|g' \
         -e 's|/sys/fs/cgroup/pids/user\.slice/user-[0-9]+\.slice/session-[0-9]+\.scope|/sys/fs/cgroup/pids/user.slice/user-[UID].slice/session-[N].scope|g' \
         -e 's|/sys/devices/system/cpu/cpu[0-9]+/cpufreq|/sys/devices/system/cpu/cpu[N]/cpufreq|g' | \
     awk -F',' 'BEGIN {OFS=","} {print $1,$2,$3,$4,$5,$6,$7,$8}'
