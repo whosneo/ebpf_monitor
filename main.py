@@ -97,14 +97,16 @@ def parse_arguments():
         action="store_true",
         help="停止运行中的守护进程",
     )
+    # 使用 -V 作为短选项，保留 -v 给 verbose
     parser.add_argument(
-        "-v",
+        "-V",
         "--version",
         action="version",
         version=get_version_info(),
         help="显示版本信息",
     )
     parser.add_argument(
+        "-v",
         "--verbose",
         action="store_true",
         help="详细输出模式",
