@@ -53,18 +53,20 @@ class ApplicationContext:
         # 2. LogManager (依赖ConfigManager, 保持单例)
         self.log_manager = LogManager(self.config_manager)
 
-        # 3. OutputController (依赖ConfigManager和LogManager)
+        # 3. 获取基础配置（在创建其他组件前）
+        self.base_dir = self.config_manager.get_base_dir()
+
+        # 4. OutputController (依赖ConfigManager和LogManager)
         self.output_controller = OutputController(
             self.config_manager,
             self.log_manager
         )
 
-        # 4. DaemonManager (依赖LogManager)
-        self.daemon_manager = DaemonManager(self.log_manager)
+        # 5. DaemonManager (依赖LogManager和base_dir)
+        self.daemon_manager = DaemonManager(self.log_manager, self.base_dir)
 
-        # 获取基础配置
+        # 获取logger
         self.logger = self.log_manager.get_logger(self)
-        self.base_dir = self.config_manager.get_base_dir()
 
         self.logger.debug("应用上下文初始化完成")
 
