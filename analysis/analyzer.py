@@ -495,7 +495,7 @@ class EBPFAnalyzer:
             print(f"{'=' * 100}")
 
             overall_avg = (df['avg_latency_us'] * df['count']).sum() / df['count'].sum() if 'count' in df.columns else \
-            df['avg_latency_us'].mean()
+                df['avg_latency_us'].mean()
             overall_min = df['min_latency_us'].min() if 'min_latency_us' in df.columns else 0
             overall_max = df['max_latency_us'].max() if 'max_latency_us' in df.columns else 0
 
@@ -696,12 +696,12 @@ class EBPFAnalyzer:
         # 文件完整排名
         if 'filename' in df.columns and 'count' in df.columns:
             print(f"\n{'=' * 100}")
-            print(f"【文件打开完整排名】")
+            print(f"【文件打开排名】 (Top 30)")
             print(f"{'=' * 100}")
             file_stats = df.groupby('filename').agg({
                 'count': 'sum',
                 'errors': 'sum'
-            }).sort_values('count', ascending=False)
+            }).sort_values('count', ascending=False).head(30)
 
             cumulative_pct = 0
             for i, (filename, row) in enumerate(file_stats.iterrows(), 1):
@@ -718,12 +718,12 @@ class EBPFAnalyzer:
         # 进程完整排名
         if 'comm' in df.columns and 'count' in df.columns:
             print(f"\n{'=' * 100}")
-            print(f"【进程文件打开完整排名】")
+            print(f"【进程文件打开排名】 (Top 30)")
             print(f"{'=' * 100}")
             proc_stats = df.groupby('comm').agg({
                 'count': 'sum',
                 'errors': 'sum'
-            }).sort_values('count', ascending=False)
+            }).sort_values('count', ascending=False).head(30)
 
             cumulative_pct = 0
             for i, (comm, row) in enumerate(proc_stats.iterrows(), 1):
@@ -771,22 +771,29 @@ class EBPFAnalyzer:
 
             error_df = df[df['errors'] > 0].copy()
             if not error_df.empty:
-                error_df['err_rate'] = (error_df['errors'] / error_df['count'] * 100)
-
-                # 错误率最高的文件
+                # 按filename聚合错误数据
                 if 'filename' in error_df.columns:
+                    file_error_stats = error_df.groupby('filename').agg({
+                        'count': 'sum',
+                        'errors': 'sum'
+                    })
+                    file_error_stats['err_rate'] = (file_error_stats['errors'] / file_error_stats['count'] * 100)
+
+                    # 错误率最高的文件
                     print(f"\n错误率最高的文件 (Top 30):")
-                    top_err_files = error_df.nlargest(30, 'err_rate')[['filename', 'count', 'errors', 'err_rate']]
-                    for i, row in enumerate(top_err_files.itertuples(), 1):
+                    top_err_files = file_error_stats.sort_values(
+                        by=['err_rate', 'errors'],
+                        ascending=[False, False]
+                    ).head(30)
+                    for i, (filename, row) in enumerate(top_err_files.iterrows(), 1):
                         print(
-                            f"  {i:2d}. {row.filename:65s} 错误率: {row.err_rate:6.2f}% ({row.errors:,}/{row.count:,})")
+                            f"  {i:2d}. {filename:65s} 错误率: {row['err_rate']:6.2f}% ({row['errors']:,}/{row['count']:,})")
 
-                # 错误次数最多的文件
-                if 'filename' in error_df.columns:
+                    # 错误次数最多的文件
                     print(f"\n错误次数最多的文件 (Top 30):")
-                    top_err_counts = error_df.nlargest(30, 'errors')[['filename', 'count', 'errors', 'err_rate']]
-                    for i, row in enumerate(top_err_counts.itertuples(), 1):
-                        print(f"  {i:2d}. {row.filename:65s} 错误: {row.errors:6,}次 (错误率: {row.err_rate:6.2f}%)")
+                    top_err_counts = file_error_stats.nlargest(30, 'errors')
+                    for i, (filename, row) in enumerate(top_err_counts.iterrows(), 1):
+                        print(f"  {i:2d}. {filename:65s} 错误: {row['errors']:6,}次 (错误率: {row['err_rate']:6.2f}%)")
 
                 # 错误最多的进程
                 if 'comm' in error_df.columns:
@@ -960,24 +967,32 @@ class EBPFAnalyzer:
             # 错误率最高的系统调用
             error_df = df[df['error_count'] > 0].copy()
             if not error_df.empty and 'syscall_name' in error_df.columns and 'count' in error_df.columns:
-                error_df['err_rate'] = (error_df['error_count'] / error_df['count'] * 100)
+                # 按syscall_name聚合错误数据
+                syscall_error_stats = error_df.groupby('syscall_name').agg({
+                    'count': 'sum',
+                    'error_count': 'sum'
+                })
+                syscall_error_stats['err_rate'] = (
+                            syscall_error_stats['error_count'] / syscall_error_stats['count'] * 100)
 
                 print(f"\n错误率最高的系统调用 (Top 20):")
-                top_errors = error_df.nlargest(20, 'err_rate')[['syscall_name', 'count', 'error_count', 'err_rate']]
-                for i, row in enumerate(top_errors.itertuples(), 1):
+                top_errors = syscall_error_stats.sort_values(
+                    by=['err_rate', 'error_count'],
+                    ascending=[False, False]
+                ).head(20)
+                for i, (syscall_name, row) in enumerate(top_errors.iterrows(), 1):
                     print(
-                        f"  {i:2d}. {row.syscall_name:25s} 错误率: {row.err_rate:6.2f}% ({row.error_count:,}/{row.count:,})")
+                        f"  {i:2d}. {syscall_name:25s} 错误率: {row['err_rate']:6.2f}% ({row['error_count']:,}/{row['count']:,})")
 
                 # 错误次数最多的系统调用
                 print(f"\n错误次数最多的系统调用 (Top 20):")
-                top_error_counts = error_df.nlargest(20, 'error_count')[
-                    ['syscall_name', 'count', 'error_count', 'err_rate']]
-                for i, row in enumerate(top_error_counts.itertuples(), 1):
+                top_error_counts = syscall_error_stats.nlargest(20, 'error_count')
+                for i, (syscall_name, row) in enumerate(top_error_counts.iterrows(), 1):
                     print(
-                        f"  {i:2d}. {row.syscall_name:25s} 错误: {row.error_count:10,}次 (错误率: {row.err_rate:6.2f}%)")
+                        f"  {i:2d}. {syscall_name:25s} 错误: {row['error_count']:10,}次 (错误率: {row['err_rate']:6.2f}%)")
 
             # 错误最多的进程
-            if 'comm' in error_df.columns:
+            if not error_df.empty and 'comm' in error_df.columns:
                 print(f"\n错误最多的进程 (Top 20):")
                 proc_errors = error_df.groupby('comm').agg({
                     'count': 'sum',
