@@ -230,11 +230,12 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error("监控循环异常: {}".format(e))
         finally:
-            ebpf_monitor.stop()
-
-            # 如果是守护进程模式，执行完整的关闭流程
+            # 守护进程模式：由perform_shutdown()统一管理关闭流程
+            # 普通模式：直接调用stop()
             if args.daemon:
                 context.daemon_manager.perform_shutdown()
+            else:
+                ebpf_monitor.stop()
 
     except Exception as e:
         logger.error("eBPF监控工具运行失败: {}".format(e))

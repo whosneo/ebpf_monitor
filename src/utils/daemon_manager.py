@@ -348,14 +348,18 @@ class DaemonManager:
         执行实际的关闭操作
         
         由主循环调用，在非信号处理器上下文中安全执行。
+        负责完整的守护进程关闭流程，包括停止监控器、清理资源和删除PID文件。
         """
         self.logger.info("开始优雅关闭守护进程...")
 
         try:
-            # 停止eBPF监控器
+            # 停止并清理eBPF监控器
             if self.ebpf_monitor:
                 self.logger.info("停止eBPF监控器...")
+                # 先停止监控
                 self.ebpf_monitor.stop()
+                # 再清理资源
+                self.logger.info("清理eBPF监控器资源...")
                 self.ebpf_monitor.cleanup()
 
             # 清理PID文件
