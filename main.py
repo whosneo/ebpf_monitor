@@ -121,23 +121,6 @@ def parse_arguments():
 
 if __name__ == "__main__":
     """主函数"""
-    # 确保当前工作目录正确，如果不正确则退出程序
-    # 注意：这里使用sys.stderr是因为logger尚未初始化，这是程序启动前的检查
-    current_dir = Path.cwd().name
-    expected_dir = Path(__file__).resolve().parent.name
-
-    if current_dir != expected_dir:
-        sys.stderr.write("错误: 必须从\"{}\"目录运行此脚本\n".format(expected_dir))
-        sys.stderr.write("当前工作目录: {}\n".format(current_dir))
-        sys.stderr.write("预期工作目录: {}\n".format(expected_dir))
-        sys.exit(1)
-
-    # 检查必要目录
-    for dir_name in REQUIRED_DIRS:
-        if not Path(dir_name).exists():
-            sys.stderr.write("缺少必要的目录: {}\n".format(dir_name))
-            sys.exit(1)
-
     # 解析命令行参数
     args = parse_arguments()
 
@@ -145,6 +128,14 @@ if __name__ == "__main__":
     context = ApplicationContext(args.config)
     logger = context.get_logger()
     logger.info("应用上下文初始化完成")
+
+    # 检查必要目录（基于项目根目录的绝对路径）
+    base_dir = context.config_manager.get_base_dir()
+    for dir_name in REQUIRED_DIRS:
+        dir_path = base_dir / dir_name
+        if not dir_path.exists():
+            logger.error("缺少必要的目录: {}".format(dir_path))
+            sys.exit(1)
 
     # 处理守护进程相关命令
     if args.daemon_status:
