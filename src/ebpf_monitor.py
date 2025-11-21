@@ -303,4 +303,5 @@ class eBPFMonitor:
         Returns:
             bool: 监控状态
         """
-        return self.running
+        with self.state_lock:
+            return self.running
