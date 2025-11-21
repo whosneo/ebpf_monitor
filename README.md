@@ -58,16 +58,19 @@ sudo apt install python3-yaml python3-psutil
 # 进入项目目录
 cd ebpf
 
-# 默认启动（所有监控器）
+# 默认启动（所有已启用的监控器）
 sudo python3 main.py
 # 或使用Python 2.7
 sudo python main.py
 
 # 启动特定监控器
-sudo python3 main.py -m exec,func,syscall,bio,open,interrupt,page_fault
+sudo python3 main.py -m exec,func,syscall,bio,open,interrupt,page_fault,context_switch
 
 # 详细输出模式
 sudo python3 main.py --verbose
+
+# 查看版本信息
+python3 main.py -V
 ```
 
 ### 3. 守护进程模式
@@ -95,34 +98,44 @@ ebpf/
 │   │   ├── exec.py                # 进程执行监控
 │   │   ├── func.py                # 内核函数监控
 │   │   ├── syscall.py             # 系统调用监控
-│   │   ├── io.py                  # I/O 操作监控
+│   │   ├── bio.py                 # 块I/O操作监控
 │   │   ├── open.py                # 文件打开监控
 │   │   ├── interrupt.py           # 中断监控
-│   │   └── page_fault.py          # 页面错误监控
+│   │   ├── page_fault.py          # 页面错误监控
+│   │   └── context_switch.py      # 上下文切换监控
 │   ├── ebpf/                      # eBPF 内核程序
 │   │   ├── exec.c                 # 进程执行监控 eBPF 程序
 │   │   ├── func.c                 # 内核函数监控 eBPF 程序
 │   │   ├── syscall.c              # 系统调用监控 eBPF 程序
-│   │   ├── io.c                   # I/O 操作监控 eBPF 程序
+│   │   ├── bio.c                  # 块I/O操作监控 eBPF 程序
 │   │   ├── open.c                 # 文件打开监控 eBPF 程序
 │   │   ├── interrupt.c            # 中断监控 eBPF 程序
-│   │   └── page_fault.c           # 页面错误监控 eBPF 程序
+│   │   ├── page_fault.c           # 页面错误监控 eBPF 程序
+│   │   └── context_switch.c       # 上下文切换监控 eBPF 程序
 │   └── utils/                     # 工具模块
 │       ├── application_context.py # 应用上下文（依赖注入）
 │       ├── config_manager.py      # 配置管理器
 │       ├── configs.py             # 配置数据类
 │       ├── log_manager.py         # 日志管理器
 │       ├── monitor_registry.py    # 监控器注册表
+│       ├── monitor_factory.py     # 监控器工厂
+│       ├── monitor_context.py     # 监控器上下文
 │       ├── capability_checker.py  # 系统兼容性检查
 │       ├── output_controller.py   # 输出控制器
 │       ├── data_processor.py      # 数据处理工具
 │       ├── daemon_manager.py      # 守护进程管理
-│       └── decorators.py          # 装饰器定义
+│       ├── decorators.py          # 装饰器定义
+│       └── py2_compat.py          # Python 2兼容性支持
 ├── config/                        # 配置文件
 │   └── monitor_config.yaml        # 主配置文件
 ├── docs/                          # 文档目录
 │   ├── ARCHITECTURE.md            # 架构设计文档
 │   └── USER_GUIDE.md              # 用户使用指南
+├── analysis/                      # 数据分析工具
+│   ├── analyzer.py                # 主分析程序
+│   ├── data_utils.py              # 数据处理工具
+│   ├── preprocess_data.sh         # 数据预处理脚本
+│   └── README.md                  # 分析工具文档
 ├── logs/                          # 日志文件目录
 ├── output/                        # 监控数据输出目录
 └── temp/                          # 临时文件目录
@@ -193,123 +206,125 @@ ebpf/
 
 ## 📊 监控功能
 
+### 数据输出模式
+
+系统采用**聚合统计模式**输出监控数据，具有以下特点：
+
+- **高效聚合**：按配置的时间间隔（默认2秒）聚合统计数据
+- **数据量小**：相比单条记录模式，数据量减少90%以上
+- **统计丰富**：包含count、error_rate、avg_latency等统计指标
+- **便于分析**：预聚合的数据可直接用于性能分析
+
 ### 当前支持的监控器
 
 | 监控器 | 功能描述 | eBPF机制 | 输出字段 |
 |-------|---------|---------|----------|
-| **exec** | 进程执行监控 | kprobe | 时间戳、进程名、UID、PID、命令参数 |
+| **exec** | 进程执行监控 | kprobe | 时间戳、进程名、UID、PID、可执行文件路径 |
 | **open** | 文件打开监控 | tracepoint | 进程信息、文件路径、打开标志、操作类型、操作延迟 |
 | **bio** | 块 I/O 操作监控 | tracepoint | 进程信息、I/O类型、操作延迟、吞吐量 |
 | **syscall** | 系统调用监控 | tracepoint | 进程信息、系统调用号、分类、数量、错误状态 |
 | **func** | 内核函数监控 | kprobe | 进程信息、函数名、数量 |
 | **interrupt** | 中断监控 | tracepoint | 中断名称、类型、CPU、数量 |
 | **page_fault** | 页面错误监控 | tracepoint | 进程信息、错误类型、CPU、NUMA、数量 |
+| **context_switch** | 上下文切换监控 | tracepoint | 进程信息、CPU、切换次数、状态 |
 
 ### 监控器详细说明
 
 **ExecMonitor（进程执行监控）**
-- **机制**：使用 `syscalls:sys_enter_execve` 和 `syscalls:sys_exit_execve` tracepoint
-- **特点**：捕获进程执行完整信息，包括命令行参数（最多4个）
+- **机制**：使用 kprobe 动态探针，附加到 `__x64_sys_execve`/`sys_execve` 等内核符号
+- **特点**：兼容老内核（如RHEL 7/内核3.10），捕获进程执行信息，单条记录模式
 - **应用场景**：进程启动监控、安全审计、性能分析
+- **兼容性**：支持多种内核版本，自动尝试不同的execve符号名称
 
 **FuncMonitor（内核函数监控）**
 - **机制**：使用 kprobe 动态探针技术
-- **特点**：支持通配符模式匹配（如 `vfs_*`），动态生成探针，可配置探针数量限制
+- **特点**：支持函数名列表配置（支持通配符如 `vfs_*`），动态生成探针，聚合统计模式
 - **应用场景**：内核开发调试、性能热点分析、函数调用跟踪
 - **配置示例**：
   ```yaml
   func:
     enabled: true
-    patterns: ["vfs_*", "sys_*"]  # 监控VFS和系统调用相关函数
-    probe_limit: 10               # 最多10个探针
+    interval: 2
+    patterns: ["vfs_read", "sys_*"]  # 函数名列表
+    probe_limit: 10                      # 最大探针数量
   ```
+- **注意**：patterns支持通配符（如 `vfs_*`），会从 `/proc/kallsyms` 中查找匹配的函数
 
 **SyscallMonitor（系统调用监控）**
 - **机制**：使用 `raw_syscalls:sys_enter` 和 `raw_syscalls:sys_exit` tracepoint
-- **特点**：智能分类（文件IO、网络、内存、进程、信号、时间），支持性能阈值和采样策略
+- **特点**：智能分类（文件IO、网络、内存、进程、IPC等），聚合统计模式，支持错误率分析
 - **应用场景**：系统调用性能分析、异常检测、资源使用监控
 - **配置示例**：
   ```yaml
   syscall:
     enabled: true
-    sampling_strategy: "intelligent"
+    interval: 2
     monitor_categories:
       file_io: true
       network: true
       memory: true
       process: true
-      signal: false
-      time: false
-    performance_thresholds:
-      file_io_ms: 1.0
-      network_ms: 5.0
-      memory_ms: 0.5
-      process_ms: 10.0
-      default_us: 100
+      ipc: true
+    show_errors_only: false
   ```
 
-**IOMonitor（I/O 操作监控）**
-- **机制**：使用 `syscalls:sys_enter_read/write` 和 `syscalls:sys_exit_read/write` tracepoint
-- **特点**：测量I/O延迟和吞吐量，支持慢I/O和大I/O检测
-- **应用场景**：存储性能分析、I/O瓶颈定位、应用优化
+**BIOMonitor（块I/O操作监控）**
+- **机制**：使用 `block:block_rq_issue` 和 `block:block_rq_complete` tracepoint
+- **特点**：监控块设备层IO，测量延迟和吞吐量，聚合统计模式，过滤Page Cache命中
+- **应用场景**：存储性能分析、I/O瓶颈定位、磁盘性能评估
 - **配置示例**：
   ```yaml
-  io:
+  bio:
     enabled: true
-    slow_io_threshold_us: 10000   # 慢I/O阈值（微秒）
-    large_io_threshold_kb: 64     # 大I/O阈值（KB）
+    interval: 2
+    min_latency_us: 0   # 最小延迟过滤（微秒）
   ```
 
 **OpenMonitor（文件打开监控）**
 - **机制**：使用 `syscalls:sys_enter/exit_open/openat` tracepoint
-- **特点**：监控文件访问模式、权限和操作状态
+- **特点**：监控文件访问模式、权限和操作状态，聚合统计模式，支持错误率分析
 - **应用场景**：文件访问审计、权限分析、安全监控
 - **配置示例**：
   ```yaml
   open:
     enabled: true
-    show_failed: true             # 是否显示失败的操作
+    interval: 2
+    min_count: 1               # 最小访问次数过滤
+    show_errors_only: false    # 是否只显示有错误的操作
   ```
 
 **InterruptMonitor（中断监控）**
-- **机制**：使用 `irq:irq_handler_entry/exit` 和 `irq:softirq_entry/exit` tracepoint
-- **特点**：区分硬件/软件中断，支持延迟测量和CPU亲和性分析
-- **应用场景**：系统性能调优、中断负载均衡、延迟分析
+- **机制**：使用 `irq:irq_handler_entry` 和 `irq:softirq_entry` tracepoint
+- **特点**：区分硬件/软件中断，聚合统计模式，支持CPU亲和性分析
+- **应用场景**：系统性能调优、中断负载均衡、CPU热点分析
 - **配置示例**：
   ```yaml
   interrupt:
     enabled: true
-    monitor_hardware: true        # 监控硬件中断
-    monitor_software: true        # 监控软中断
-    monitor_timer: true           # 监控定时器中断
-    monitor_network: true         # 监控网络中断
-    monitor_block: true           # 监控块设备中断
-    monitor_migration: false      # 监控进程迁移
+    interval: 2
   ```
 
 **PageFaultMonitor（页面错误监控）**
-- **机制**：使用 `exceptions:page_fault_user/kernel` tracepoint
-- **特点**：区分主要/次要页面错误，支持用户/内核空间过滤
+- **机制**：使用 `exceptions:page_fault_user` tracepoint
+- **特点**：监控用户空间页面错误，区分主要/次要错误，聚合统计模式，支持NUMA节点分析
 - **应用场景**：内存性能分析、内存压力监控、应用优化
 - **配置示例**：
   ```yaml
   page_fault:
     enabled: true
-    monitor_major_faults: true    # 监控主要页面错误
-    monitor_minor_faults: true    # 监控次要页面错误
-    monitor_write_faults: true    # 监控写错误
-    monitor_user_faults: true     # 监控用户空间错误
-    monitor_kernel_faults: false  # 监控内核空间错误
+    interval: 2                # 统计周期（秒）
   ```
 
 **ContextSwitchMonitor（上下文切换监控）**
 - **机制**：使用 `sched:sched_switch` tracepoint
-- **特点**：监控进程/线程上下文切换，分析CPU调度性能
-- **应用场景**：CPU调度分析、性能优化、延迟诊断
+- **特点**：监控进程/线程上下文切换，分析CPU调度性能，支持统计聚合
+- **应用场景**：CPU调度分析、性能优化、延迟诊断、负载均衡分析
 - **配置示例**：
   ```yaml
   context_switch:
     enabled: true
+    interval: 2              # 统计周期（秒）
+    min_switches: 10         # 最小切换次数过滤
   ```
 
 ## ⚙️ 配置管理
@@ -368,13 +383,13 @@ monitors:
   
   func:
     enabled: true
-    patterns: ["vfs_*"]          # 匹配模式
-    probe_limit: 10              # 最大探针数量
+    interval: 2
+    patterns: ["vfs_read", "vfs_write"]  # 匹配模式
+    probe_limit: 10                      # 最大探针数量
   
   syscall:
     enabled: true
-    sampling_strategy: "intelligent"
-    high_priority_syscalls: [0, 1, 2, 3, 9, 57, 59]
+    interval: 2
     monitor_categories:
       file_io: true
       network: true
@@ -382,40 +397,32 @@ monitors:
       process: true
       signal: false
       time: false
-    performance_thresholds:
-      file_io_ms: 1.0
-      network_ms: 5.0
-      memory_ms: 0.5
-      process_ms: 10.0
-      default_us: 100
-    max_events_per_second: 1000
+      ipc: true
     show_errors_only: false
   
-  io:
+  bio:
     enabled: true
-    slow_io_threshold_us: 10000
-    large_io_threshold_kb: 64
+    interval: 2
+    min_latency_us: 0                    # 最小延迟过滤（微秒）
   
   open:
     enabled: true
-    show_failed: true
+    interval: 2
+    min_count: 1                         # 最小访问次数过滤
+    show_errors_only: false
   
   interrupt:
     enabled: true
-    monitor_hardware: true
-    monitor_software: true
-    monitor_timer: true
-    monitor_network: true
-    monitor_block: true
-    monitor_migration: false
+    interval: 2
   
   page_fault:
     enabled: true
-    monitor_major_faults: true
-    monitor_minor_faults: true
-    monitor_write_faults: true
-    monitor_user_faults: true
-    monitor_kernel_faults: false
+    interval: 2
+  
+  context_switch:
+    enabled: true
+    interval: 2
+    min_switches: 10                     # 最小切换次数过滤
 ```
 
 ### 配置特点
@@ -446,71 +453,98 @@ monitors:
 
 ```
 output/
-├── exec_20250924_143045.csv      # 进程执行监控数据
-├── func_20250924_143045.csv      # 内核函数监控数据
-├── syscall_20250924_143045.csv   # 系统调用监控数据
-├── io_20250924_143045.csv        # I/O 操作监控数据
-├── open_20250924_143045.csv      # 文件打开监控数据
-├── interrupt_20250924_143045.csv # 中断监控数据
-└── page_fault_20250924_143045.csv # 页面错误监控数据
+├── exec_20251121_143045.csv           # 进程执行监控数据
+├── func_20251121_143045.csv           # 内核函数监控数据
+├── syscall_20251121_143045.csv        # 系统调用监控数据
+├── bio_20251121_143045.csv            # 块I/O操作监控数据
+├── open_20251121_143045.csv           # 文件打开监控数据
+├── interrupt_20251121_143045.csv      # 中断监控数据
+├── page_fault_20251121_143045.csv     # 页面错误监控数据
+└── context_switch_20251121_143045.csv # 上下文切换监控数据
 ```
 
-**ExecMonitor CSV 数据示例**：
+### 聚合统计格式
+
+大部分监控器采用聚合统计格式输出，按配置的时间间隔（默认2秒）汇总数据：
+
+**优势**：
+- 数据量减少90%以上
+- 包含丰富的统计指标（count、error_rate、avg_latency等）
+- 便于直接进行性能分析
+- 减少存储空间需求
+
+**ExecMonitor CSV 数据示例**（单条记录模式）：
 ```csv
-timestamp,time_str,comm,uid,pid,ppid,ret,argv
-1726123845.123,[2025-09-12 14:30:45.123],nginx,0,1234,1,0,"nginx -g daemon off;"
-1726123845.234,[2025-09-12 14:30:45.234],mysql,999,5678,1,0,"mysqld --defaults-file=/etc/mysql/my.cnf"
+timestamp,time_str,uid,pid,comm,filename
+1732176700.123,[2025-11-21 14:30:00.123],0,1234,bash,/usr/bin/ls
+1732176700.234,[2025-11-21 14:30:00.234],1000,5678,python3,/usr/bin/python3
 ```
 
-**FuncMonitor CSV 数据示例**：
+**FuncMonitor CSV 数据示例**（聚合统计模式）：
 ```csv
-timestamp,time_str,pid,ppid,uid,comm,func_name
-1726123845.345,[2025-09-12 14:30:45.345],1234,1,0,nginx,vfs_read
-1726123845.456,[2025-09-12 14:30:45.456],5678,1,999,mysql,vfs_write
+timestamp,time_str,comm,func_name,count
+1732176700.000,[2025-11-21 14:30:00.000],nginx,vfs_read,1250
+1732176700.000,[2025-11-21 14:30:00.000],nginx,vfs_write,856
 ```
 
-**SyscallMonitor CSV 数据示例**：
+**SyscallMonitor CSV 数据示例**（聚合统计模式）：
 ```csv
-timestamp,time_str,monitor_type,pid,tid,cpu,comm,syscall_nr,syscall_name,category,ret_val,error_name,duration_ns,duration_us,duration_ms,is_error,is_slow_call
-1726123845.123,[2025-09-12 14:30:45.123],syscall,1234,1234,2,nginx,2,open,file_io,3,SUCCESS,15000,15.0,0.015,false,false
+timestamp,time_str,monitor_type,comm,syscall_nr,syscall_name,category,count,error_count,error_rate
+1732176700.000,[2025-11-21 14:30:00.000],syscall,nginx,0,read,file_io,1250,5,0.004
+1732176700.000,[2025-11-21 14:30:00.000],nginx,1,write,file_io,856,2,0.002
 ```
 
-**IOMonitor CSV 数据示例**：
+**BIOMonitor CSV 数据示例**（聚合统计模式）：
 ```csv
-timestamp,time_str,io_type,type_str,fd,size,duration_ns,duration_us,throughput_mbps,pid,tid,cpu,comm,ret_val,is_error
-1726123845.567,[2025-09-12 14:30:45.567],1,READ,3,4096,25000,25.0,156.25,1234,1234,2,nginx,4096,false
-1726123845.678,[2025-09-12 14:30:45.678],2,WRITE,4,8192,50000,50.0,156.25,5678,5678,1,mysql,8192,false
+timestamp,time_str,comm,io_type,io_type_str,count,total_bytes,size_mb,avg_latency_us,min_latency_us,max_latency_us,throughput_mbps
+1732176700.000,[2025-11-21 14:30:00.000],mysqld,0,READ,1250,5242880,5.00,125.5,10.2,2500.8,40.0
+1732176700.000,[2025-11-21 14:30:00.000],mysqld,1,WRITE,856,3538944,3.38,256.3,15.6,5000.2,13.2
 ```
 
-**OpenMonitor CSV 数据示例**：
+**OpenMonitor CSV 数据示例**（聚合统计模式）：
 ```csv
-timestamp,time_str,type,type_str,pid,tid,uid,cpu,comm,flags,mode,ret,filename
-1726123845.789,[2025-09-12 14:30:45.789],1,OPENAT,1234,1234,0,2,nginx,0,0644,3,/var/log/nginx/access.log
-1726123845.890,[2025-09-12 14:30:45.890],0,OPEN,5678,5678,999,1,mysql,2,0644,4,/var/lib/mysql/data.db
+timestamp,time_str,comm,operation,filename,count,errors,error_rate,avg_lat_us,min_lat_us,max_lat_us,flags
+1732176700.000,[2025-11-21 14:30:00.000],nginx,OPENAT,/var/log/nginx/access.log,125,0,0.000,45.2,12.5,250.8,WR|CLO
+1732176700.000,[2025-11-21 14:30:00.000],mysqld,OPEN,/var/lib/mysql/data.db,85,2,0.024,125.6,25.3,1500.2,RD|WR
 ```
 
-**InterruptMonitor CSV 数据示例**：
+**InterruptMonitor CSV 数据示例**（聚合统计模式）：
 ```csv
-timestamp,time_str,irq_num,irq_type,irq_type_str,irq_name,comm,pid,tid,duration_ns,duration_us,cpu,softirq_vec,orig_cpu,dest_cpu
-1726123845.991,[2025-09-12 14:30:45.991],0,1,HARDWARE,hw_irq,swapper,0,0,2500,2.5,0,0,,
-1726123846.123,[2025-09-12 14:30:46.123],0,2,SOFTWARE,TIMER,ksoftirqd,10,10,1200,1.2,1,1,,
+timestamp,time_str,comm,irq_type,irq_type_str,cpu,count
+1732176700.000,[2025-11-21 14:30:00.000],swapper/0,1,TIMER,0,2500
+1732176700.000,[2025-11-21 14:30:00.000],ksoftirqd/1,2,NET_RX,1,1250
 ```
 
-**PageFaultMonitor CSV 数据示例**：
+**PageFaultMonitor CSV 数据示例**（聚合统计模式）：
 ```csv
-timestamp,time_str,pid,tid,comm,address,address_hex,fault_type,fault_type_str,cpu,is_major_fault,is_minor_fault,is_write_fault,is_user_fault
-1726123846.234,[2025-09-12 14:30:46.234],1234,1234,nginx,140737488347136,0x7fff00000000,9,MINOR|USER,2,false,true,false,true
-1726123846.345,[2025-09-12 14:30:46.345],5678,5678,mysql,94558428200960,0x55f123456000,10,MAJOR|USER,1,true,false,false,true
+timestamp,time_str,comm,fault_type,fault_type_str,cpu,numa_node,count
+1732176700.000,[2025-11-21 14:30:00.000],nginx,1,MINOR,2,0,1250
+1732176700.000,[2025-11-21 14:30:00.000],mysqld,2,MAJOR,1,0,85
+```
+
+**ContextSwitchMonitor CSV 数据示例**（聚合统计模式）：
+```csv
+timestamp,time_str,prev_comm,next_comm,cpu,count
+1732176700.000,[2025-11-21 14:30:00.000],nginx,swapper/0,2,125
+1732176700.000,[2025-11-21 14:30:00.000],swapper/0,nginx,2,125
 ```
 
 ### 控制台实时输出
 
-当只启动单个监控器时，支持控制台实时显示：
+当只启动单个监控器时，支持控制台实时显示。输出格式因监控器类型而异：
 
+**ExecMonitor 控制台输出**：
 ```
-TIME                   COMM             UID    PID      PPID     RET  ARGS
-[2025-09-12 14:30:45]  nginx            0      1234     1        0    nginx -g daemon off;
-[2025-09-12 14:30:46]  mysql            999    5678     1        0    mysqld --defaults-file=/etc/mysql/my.cnf
+TIME                   UID    PID      COMM             FILENAME
+[2025-11-21 14:30:00]  0      1234     bash             /usr/bin/ls
+[2025-11-21 14:30:01]  1000   5678     python3          /usr/bin/python3
+```
+
+**聚合统计监控器控制台输出**（以FuncMonitor为例）：
+```
+TIME                   COMM             FUNC_NAME        COUNT
+[2025-11-21 14:30:00]  nginx            vfs_read         1250
+[2025-11-21 14:30:00]  nginx            vfs_write        856
 ```
 
 ## 🔧 开发和扩展
@@ -538,8 +572,6 @@ TRACEPOINT_PROBE(custom, event_name) {
 # src/monitors/custom.py
 @register_monitor("custom")
 class CustomMonitor(BaseMonitor):
-    EVENT_TYPE = CustomEvent
-    
     def get_csv_header(self):
         return ['timestamp', 'custom_field']
     
@@ -624,30 +656,65 @@ output:
 sudo python3 main.py -m exec
 ```
 
-**性能参数调优**
-```yaml
-# config/monitor_config.yaml
-performance:
-  output_batch_size: 2000           # 增大批处理大小
-  bpf_poll_timeout: 500             # 减少轮询超时
+## 📊 数据分析
+
+项目提供了强大的数据分析工具，用于分析eBPF监控系统采集的性能数据。
+
+### 分析工具特性
+
+- **支持所有监控器类型**：exec, bio, func, open, syscall, interrupt, page_fault
+- **聚合统计分析**：针对聚合统计格式优化，分析速度快
+- **多维度统计**：提供Top排名、百分比、交叉分析等
+- **数据预处理**：自动分割大文件，按日期组织数据
+- **可视化报告**：生成格式化的文本分析报告
+
+### 快速使用
+
+```bash
+# 进入分析目录
+cd analysis
+
+# 预处理数据（可选，将大文件按日期分割）
+./preprocess_data.sh
+
+# 分析指定日期的所有数据
+python3 analyzer.py --date 20251121
+
+# 分析特定类型的数据
+python3 analyzer.py --date 20251121 --type bio
+
+# 查看帮助
+python3 analyzer.py --help
 ```
+
+### 分析示例输出
+
+```
+================================================================================
+BIO (块I/O) 监控数据分析 - 20251121
+================================================================================
+
+总I/O操作数: 12,345
+总数据量: 1,234.56 MB (1,294,967,296 bytes)
+
+按I/O类型统计:
+  READ                   8,234次 (66.70%) |   800.50 MB | 平均延迟:   1,234.56 μs
+  WRITE                  3,456次 (28.00%) |   400.25 MB | 平均延迟:   2,345.67 μs
+  ...
+
+按进程统计 (Top 15):
+   1. mysqld                  5,678次 (46.00%) |   567.89 MB
+   2. nginx                   3,456次 (28.00%) |   345.67 MB
+   ...
+```
+
+详细使用说明请参考 [分析工具文档](analysis/README.md)。
 
 ## 📚 相关文档
 
 - [架构设计文档](docs/ARCHITECTURE.md) - 详细的系统架构和设计原理
 - [用户使用指南](docs/USER_GUIDE.md) - 完整的安装配置和使用说明
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request 来改进本项目。
-
-## 💡 技术支持
-
-遇到问题时请按以下步骤排查：
-
-1. 查看相应方案的故障排除章节
-2. 检查运行日志
-3. 在 GitHub Issues 中提交问题报告
+- [数据分析工具](analysis/README.md) - 数据分析工具使用指南
 
 ---
 
