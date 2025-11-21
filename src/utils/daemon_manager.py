@@ -39,25 +39,29 @@ class DaemonManager:
     实现传统Unix守护进程标准。
     """
 
-    def __init__(self, log_manager, pid_file="temp/monitor.pid"):
-        # type: (LogManager, str) -> None
+    def __init__(self, log_manager, base_dir, pid_file="temp/monitor.pid"):
+        # type: (LogManager, Path, str) -> None
         """
         初始化守护进程管理器
         
         Args:
             log_manager: 日志管理器
+            base_dir: 项目根目录（绝对路径）
             pid_file: PID文件路径，相对于项目根目录
         """
-        self._setup_daemon_manager(log_manager, pid_file)
+        self._setup_daemon_manager(log_manager, base_dir, pid_file)
 
-    def _setup_daemon_manager(self, log_manager, pid_file):
-        # type: (LogManager, str) -> None
+    def _setup_daemon_manager(self, log_manager, base_dir, pid_file):
+        # type: (LogManager, Path, str) -> None
         """设置守护进程管理器"""
         self.log_manager = log_manager
         self.logger = log_manager.get_logger(self)
 
-        # PID文件路径
-        self.pid_file = Path(pid_file)
+        # PID文件路径（基于项目根目录的绝对路径）
+        if Path(pid_file).is_absolute():
+            self.pid_file = Path(pid_file)
+        else:
+            self.pid_file = base_dir / pid_file
         self.pid_file.parent.mkdir(parents=True, exist_ok=True)
 
         # 守护进程状态
