@@ -40,17 +40,22 @@ REQUIRED_DIRS = ["src", "src/ebpf", "src/monitors", "src/utils", "config", "logs
 
 def get_version_info():
     # type: () -> str
-    """获取版本信息，支持多种来源的容错处理"""
+    """获取版本信息，支持多种来源的容错处理
+
+    总是返回一个字符串，避免 argparse 在创建 parser 时拿到 None。
+    """
     try:
         # 优先从配置文件获取
         from src.utils.config_manager import ConfigManager
         config_manager = ConfigManager()
         app_config = config_manager.get_app_config()
-        if hasattr(app_config, 'version') and app_config.version:
+        if getattr(app_config, 'version', None):
             return "eBPF监控工具 v{}".format(app_config.version)
     except Exception:
-        # 回退选项
-        return "eBPF监控工具 v1.0.0"
+        # 忽略并使用回退版本
+        pass
+    # 明确的回退值，确保返回字符串
+    return "eBPF监控工具 v1.0.0"
 
 
 def parse_arguments():
