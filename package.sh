@@ -35,4 +35,5 @@ env COPYFILE_DISABLE=1 tar -zcf ~/Downloads/ebpf-monitor-$(date +%Y%m%d).tar.gz 
   --exclude='analysis/daily_data/*/*.csv' \
   --exclude='analysis/reports/*/*.txt' \
   --exclude='analysis/reports/*.md' \
+  --exclude='*.md' \
   .
