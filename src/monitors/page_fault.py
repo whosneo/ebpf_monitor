@@ -15,11 +15,7 @@
 - WRITE (0x4): 写访问导致的错误
 - USER (0x8): 用户空间错误
 
-支持的分析场景：
-- 识别内存密集型进程和页面错误模式
-- 分析MAJOR页面错误（涉及磁盘I/O）的来源
-- 分析页面错误在各CPU和NUMA节点上的分布
-- 区分用户空间和内核空间的页面错误
+模式：STATISTICAL（统计聚合）
 """
 
 # 兼容性导入
@@ -30,89 +26,68 @@ except ImportError:
 
 # 本地模块导入
 from .base import BaseMonitor
-from ..utils.data_processor import DataProcessor
 from ..utils.decorators import register_monitor
 
 
-# ==================== PageFault数据处理工具类 ====================
+# ==================== 页面错误常量定义 ====================
 
-class PageFaultDataUtils(object):
-    """
-    PageFault数据处理工具类
-    
-    提供页面错误类型判断和格式化功能。
-    仅供PageFaultMonitor内部使用。
-    """
+# 页面错误类型常量（与C代码保持一致）
+FAULT_TYPE_MINOR = 0x1  # 次要页面错误（页面在内存，权限问题）
+FAULT_TYPE_MAJOR = 0x2  # 主要页面错误（页面不在内存，需要加载）
+FAULT_TYPE_WRITE = 0x4  # 写错误（写访问导致的错误）
+FAULT_TYPE_USER = 0x8   # 用户空间错误（用户模式访问）
 
-    # 页面错误类型常量（与C代码保持一致）
-    FAULT_TYPE_MINOR = 0x1  # 次要页面错误（页面在内存，权限问题）
-    FAULT_TYPE_MAJOR = 0x2  # 主要页面错误（页面不在内存，需要加载）
-    FAULT_TYPE_WRITE = 0x4  # 写错误（写访问导致的错误）
-    FAULT_TYPE_USER = 0x8  # 用户空间错误（用户模式访问）
 
-    @staticmethod
-    def fault_type_to_str(fault_type):
-        # type: (int) -> str
-        """获取错误类型字符串（显式显示所有维度）"""
-        types = []
+def fault_type_to_str(fault_type):
+    # type: (int) -> str
+    """获取错误类型字符串（显式显示所有维度）"""
+    types = []
 
-        # 维度1：MAJOR vs MINOR
-        if fault_type & PageFaultDataUtils.FAULT_TYPE_MINOR:
-            types.append("MINOR")
-        elif fault_type & PageFaultDataUtils.FAULT_TYPE_MAJOR:
-            types.append("MAJOR")
-        else:
-            types.append("UNKNOWN")
+    # 维度1：MAJOR vs MINOR
+    if fault_type & FAULT_TYPE_MINOR:
+        types.append("MINOR")
+    elif fault_type & FAULT_TYPE_MAJOR:
+        types.append("MAJOR")
+    else:
+        types.append("UNKNOWN")
 
-        # 维度2：WRITE vs READ（显式）
-        if fault_type & PageFaultDataUtils.FAULT_TYPE_WRITE:
-            types.append("WRITE")
-        else:
-            types.append("READ")
+    # 维度2：WRITE vs READ（显式）
+    if fault_type & FAULT_TYPE_WRITE:
+        types.append("WRITE")
+    else:
+        types.append("READ")
 
-        # 维度3：USER vs KERNEL（显式）
-        if fault_type & PageFaultDataUtils.FAULT_TYPE_USER:
-            types.append("USER")
-        else:
-            types.append("KERNEL")
+    # 维度3：USER vs KERNEL（显式）
+    if fault_type & FAULT_TYPE_USER:
+        types.append("USER")
+    else:
+        types.append("KERNEL")
 
-        return "|".join(types)
+    return "|".join(types)
 
-    @staticmethod
-    def is_major_fault(fault_type):
-        # type: (int) -> bool
-        """是否为主要页面错误"""
-        return bool(fault_type & PageFaultDataUtils.FAULT_TYPE_MAJOR)
 
-    @staticmethod
-    def is_minor_fault(fault_type):
-        # type: (int) -> bool
-        """是否为次要页面错误"""
-        return bool(fault_type & PageFaultDataUtils.FAULT_TYPE_MINOR)
+def is_major_fault(fault_type):
+    # type: (int) -> bool
+    """是否为主要页面错误"""
+    return bool(fault_type & FAULT_TYPE_MAJOR)
 
-    @staticmethod
-    def is_write_fault(fault_type):
-        # type: (int) -> bool
-        """是否为写错误"""
-        return bool(fault_type & PageFaultDataUtils.FAULT_TYPE_WRITE)
 
-    @staticmethod
-    def is_read_fault(fault_type):
-        # type: (int) -> bool
-        """是否为读错误（即非写错误）"""
-        return not PageFaultDataUtils.is_write_fault(fault_type)
+def is_minor_fault(fault_type):
+    # type: (int) -> bool
+    """是否为次要页面错误"""
+    return bool(fault_type & FAULT_TYPE_MINOR)
 
-    @staticmethod
-    def is_user_fault(fault_type):
-        # type: (int) -> bool
-        """是否为用户空间错误"""
-        return bool(fault_type & PageFaultDataUtils.FAULT_TYPE_USER)
 
-    @staticmethod
-    def is_kernel_fault(fault_type):
-        # type: (int) -> bool
-        """是否为内核空间错误（即非用户空间）"""
-        return not PageFaultDataUtils.is_user_fault(fault_type)
+def is_write_fault(fault_type):
+    # type: (int) -> bool
+    """是否为写错误"""
+    return bool(fault_type & FAULT_TYPE_WRITE)
+
+
+def is_user_fault(fault_type):
+    # type: (int) -> bool
+    """是否为用户空间错误"""
+    return bool(fault_type & FAULT_TYPE_USER)
 
 
 # ==================== PageFault监控器 ====================
@@ -120,16 +95,43 @@ class PageFaultDataUtils(object):
 
 @register_monitor("page_fault")
 class PageFaultMonitor(BaseMonitor):
-    """页面错误监控器 - 专注于监控流程管理"""
+    """页面错误监控器 - 统计聚合模式
+    
+    监控页面错误，统计错误类型分布和NUMA节点分布。
+    """
     REQUIRED_TRACEPOINTS = [  # type: List[str]
         "exceptions:page_fault_user",
         "exceptions:page_fault_kernel"
     ]
 
+    def _get_numa_node(self, cpu):
+        # type: (int) -> int
+        """根据CPU编号获取NUMA节点"""
+        return self.cpu_to_numa.get(cpu, -1)
+
+    CSV_COLUMNS = [
+        ("comm", "comm"),
+        ("fault_type", "fault_type"),
+        ("fault_type_str", "fault_type", fault_type_to_str),
+        ("cpu", "cpu"),
+        ("numa_node", "cpu", _get_numa_node),
+        ("count", "count"),
+    ]
+
+    CONSOLE_FORMAT = (
+        "{:<16} {:<22} {:<3} {:<4} {:<10}",
+        [
+            "comm",
+            ("fault_type", fault_type_to_str),
+            "cpu",
+            ("cpu", _get_numa_node),
+            "count",
+        ],
+    )
+
     def _initialize(self, config):
         # type: (Dict[str, Any]) -> None
         """初始化页面错误监控器"""
-        # NUMA节点映射
         self.cpu_to_numa = {}  # type: Dict[int, int]
         self._init_numa_mapping()
 
@@ -167,42 +169,3 @@ class PageFaultMonitor(BaseMonitor):
             else:
                 cpus.append(int(part))
         return cpus
-
-    # ==================== 格式化方法实现 ====================
-
-    def monitor_csv_header(self):
-        # type: () -> List[str]
-        """获取CSV头部字段"""
-        return [
-            "comm", "fault_type", "fault_type_str",
-            "cpu", "numa_node", "count"
-        ]
-
-    def monitor_csv_data(self, data):
-        # type: (Dict[str, Any]) -> Dict[str, Any]
-        """将事件数据格式化为CSV行数据"""
-        return {
-            "comm": data["comm"],
-            "fault_type": data["fault_type"],
-            "fault_type_str": PageFaultDataUtils.fault_type_to_str(data["fault_type"]),
-            "cpu": data["cpu"],
-            "numa_node": self.cpu_to_numa.get(data["cpu"], -1),
-            "count": data["count"]
-        }
-
-    def monitor_console_header(self):
-        # type: () -> str
-        """获取控制台输出的表头"""
-        return "{:<16} {:<22} {:<3} {:<4} {:<10}".format(
-            "COMM", "FAULT_TYPE", "CPU", "NUMA", "COUNT")
-
-    def monitor_console_data(self, data):
-        # type: (Dict[str, Any]) -> str
-        """将事件数据格式化为控制台输出"""
-        return "{:<16} {:<22} {:<3} {:<4} {:<10}".format(
-            data["comm"],
-            PageFaultDataUtils.fault_type_to_str(data["fault_type"]),
-            data["cpu"],
-            self.cpu_to_numa.get(data["cpu"], -1),
-            data["count"]
-        )

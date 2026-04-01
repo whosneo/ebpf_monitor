@@ -304,6 +304,29 @@ class SyscallMonitor(BaseMonitor):
         "raw_syscalls:sys_exit"
     ]
 
+    CSV_COLUMNS = [
+        ("comm", "comm"),
+        ("syscall_nr", "syscall_nr"),
+        ("syscall_name", "syscall_nr", syscall.syscall_name),
+        ("category", "syscall_nr", lambda nr: SyscallCategory.classify(nr).value),
+        ("count", "count"),
+        ("error_count", "error_count"),
+        ("error_rate", ("count", "error_count"),
+         lambda c, e: (e / float(c)) * 100.0 if c > 0 else 0.0),
+    ]
+
+    CONSOLE_FORMAT = (
+        "{:<16} {:<12} {:<10} {:<8} {:<8} {:<6.1f}%",
+        [
+            "comm",
+            ("syscall_nr", syscall.syscall_name),
+            ("syscall_nr", lambda nr: SyscallCategory.classify(nr).value),
+            "count",
+            "error_count",
+            ("count", "error_count", lambda c, e: (e / float(c)) * 100.0 if c > 0 else 0.0),
+        ],
+    )
+
     @classmethod
     def get_default_monitor_config(cls):
         # type: () -> Dict[str, Any]
@@ -324,15 +347,7 @@ class SyscallMonitor(BaseMonitor):
     @classmethod
     def validate_monitor_config(cls, config):
         # type: (Dict[str, Any]) -> None
-        """
-        验证系统调用监控器配置
-        
-        Args:
-            config: 监控器配置字典
-            
-        Raises:
-            ValueError: 配置验证失败时抛出
-        """
+        """验证系统调用监控器配置"""
         if config.get("monitor_categories") is None:
             raise ValueError("系统调用监控配置中缺少必需字段: monitor_categories")
         if not isinstance(config.get("monitor_categories"), dict):
@@ -361,17 +376,7 @@ class SyscallMonitor(BaseMonitor):
         self.show_errors_only = config.get("show_errors_only")  # type: bool
 
     def should_collect(self, key, value):
-        """
-        判断是否应该收集数据
-
-        Args:
-            key: 键
-            value: 值
-
-        Returns:
-            bool: 是否应该收集数据
-        """
-        # 分类过滤
+        """判断是否应该收集数据"""
         category = SyscallCategory.classify(key.syscall_nr)
         if category == SyscallCategory.FILE_IO and not self.monitor_categories["file_io"]:
             return False
@@ -388,56 +393,7 @@ class SyscallMonitor(BaseMonitor):
         if category == SyscallCategory.IPC and not self.monitor_categories["ipc"]:
             return False
 
-        # 错误过滤
         if self.show_errors_only and value.error_count == 0:
             return False
 
         return True
-
-    @staticmethod
-    def _error_rate(count, error_count):
-        """计算错误率（百分比）"""
-        if count == 0:
-            return 0.0
-        return (error_count / float(count)) * 100.0
-
-    # ==================== 格式化方法实现 ====================
-
-    def monitor_csv_header(self):
-        # type: () -> List[str]
-        """获取CSV头部字段"""
-        return [
-            "comm", "syscall_nr", "syscall_name",
-            "category", "count", "error_count", "error_rate"
-        ]
-
-    def monitor_csv_data(self, data):
-        # type: (Dict[str, Any]) -> Dict[str, Any]
-        """将事件数据格式化为CSV行数据"""
-        return {
-            "comm": data["comm"],
-            "syscall_nr": data["syscall_nr"],
-            "syscall_name": syscall.syscall_name(data["syscall_nr"]),
-            "category": SyscallCategory.classify(data["syscall_nr"]).value,
-            "count": data["count"],
-            "error_count": data["error_count"],
-            "error_rate": SyscallMonitor._error_rate(data["count"], data["error_count"])
-        }
-
-    def monitor_console_header(self):
-        # type: () -> str
-        """获取控制台输出的表头"""
-        return "{:<16} {:<12} {:<10} {:<8} {:<8} {:<6}".format(
-            "COMM", "SYSCALL", "CATEGORY", "COUNT", "ERRORS", "ERR%")
-
-    def monitor_console_data(self, data):
-        # type: (Dict[str, Any]) -> str
-        """将事件数据格式化为控制台输出"""
-        return "{:<16} {:<12} {:<10} {:<8} {:<8} {:<6.1f}%".format(
-            data["comm"],
-            syscall.syscall_name(data["syscall_nr"]),
-            SyscallCategory.classify(data["syscall_nr"]).value,
-            data["count"],
-            data["error_count"],
-            SyscallMonitor._error_rate(data["count"], data["error_count"])
-        )

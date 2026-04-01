@@ -4,6 +4,11 @@
 进程执行监控器
 
 监控进程试图执行哪些程序。
+
+模式：EVENT（事件驱动）
+- 使用 perf_buffer 实时捕获进程执行事件
+- 每个事件立即处理和输出
+- 不进行统计聚合
 """
 
 # 标准库导入
@@ -16,14 +21,18 @@ except ImportError:
     from ..utils.py2_compat import Dict, List, Any
 
 # 本地模块导入
-from .base import BaseMonitor
+from .base import BaseMonitor, MonitorMode
 from ..utils.data_processor import DataProcessor
 from ..utils.decorators import register_monitor
 
 
 @register_monitor("exec")
 class ExecMonitor(BaseMonitor):
-    """进程执行监控器"""
+    """进程执行监控器 - 事件驱动模式
+    
+    使用 perf_buffer 实时捕获和处理进程执行事件。
+    每个事件在发生时立即被处理和输出，不进行聚合统计。
+    """
     BPF_POLL_TIMEOUT = 1000
 
     # 事件字段定义（对应exec_event结构体）
@@ -39,6 +48,26 @@ class ExecMonitor(BaseMonitor):
         ('comm', 's', 16),  # char[16]
         ('filename', 's', 256),  # char[256]
     ]
+
+    # 声明式CSV列定义：("列名", "数据键")
+    CSV_COLUMNS = [
+        ("uid", "uid"),
+        ("pid", "pid"),
+        ("comm", "comm"),
+        ("filename", "filename"),
+    ]
+
+    # 声明式控制台格式：("表头格式", [数据键列表])
+    CONSOLE_FORMAT = (
+        "{:<6} {:<8} {:<16} {}",
+        ["uid", "pid", "comm", "filename"],
+    )
+
+    @property
+    def mode(self):
+        # type: () -> MonitorMode
+        """指定为事件驱动模式"""
+        return MonitorMode.EVENT
 
     def _initialize(self, config):
         # type: (Dict[str, Any]) -> None
@@ -79,6 +108,13 @@ class ExecMonitor(BaseMonitor):
         # 绑定事件处理函数
         self.bpf[self.events_name].open_perf_buffer(self._handle_event)
 
+    def _poll_events(self):
+        """轮询 perf_buffer 中的事件
+        
+        事件驱动模式的核心方法，从BPF perf_buffer中读取事件。
+        """
+        self.bpf.perf_buffer_poll(timeout=self.BPF_POLL_TIMEOUT)
+
     # noinspection PyUnusedLocal
     def _handle_event(self, cpu, data, size):
         """
@@ -97,34 +133,3 @@ class ExecMonitor(BaseMonitor):
                 **event_data))
         except Exception as e:
             self.logger.error("处理事件失败: {}".format(e))
-
-    def _collect_and_output(self):
-        self.bpf.perf_buffer_poll(timeout=self.BPF_POLL_TIMEOUT)  # 轮询事件
-
-    # ==================== 格式化方法实现 ====================
-
-    def monitor_csv_header(self):
-        # type: () -> List[str]
-        """获取CSV头部字段"""
-        return ['uid', 'pid', 'comm', 'filename']
-
-    def monitor_csv_data(self, data):
-        # type: (Dict[str, Any]) -> Dict[str, Any]
-        """将事件数据格式化为CSV行数据"""
-        return {
-            "uid": data["uid"],
-            "pid": data["pid"],
-            "comm": data["comm"],
-            "filename": data["filename"]
-        }
-
-    def monitor_console_header(self):
-        # type: () -> str
-        """获取控制台输出的表头"""
-        return "{:<6} {:<8} {:<16} {}".format('UID', 'PID', 'COMM', 'FILENAME')
-
-    def monitor_console_data(self, data):
-        # type: (Dict[str, Any]) -> str
-        """将事件数据格式化为控制台输出"""
-        return "{:<6} {:<8} {:<16} {}".format(
-            data["uid"], data["pid"], data["comm"], data["filename"])

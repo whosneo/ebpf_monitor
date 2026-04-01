@@ -11,10 +11,7 @@
 输出模式：统计聚合模式（定期输出）
 统计维度：(comm, cpu) -> (switch_in, switch_out, voluntary, involuntary)
 
-应用场景：
-- 识别高频切换的进程（可能过度多线程）
-- 发现CPU调度瓶颈
-- 优化系统响应性能
+模式：STATISTICAL（统计聚合）
 """
 
 # 标准库导入
@@ -28,9 +25,11 @@ except ImportError:
 
 # 本地模块导入
 from .base import BaseMonitor
-from ..utils.data_processor import DataProcessor
+from ..utils.monitor_data_utils import MonitorDataUtils
 from ..utils.decorators import register_monitor
 
+
+# ==================== 上下文切换结构体定义 ====================
 
 class ContextSwitchKey:
     """上下文切换键"""
@@ -50,10 +49,57 @@ class ContextSwitchValue:
     ]
 
 
+# ==================== 上下文切换工具函数 ====================
+
+def calc_total_switches(data):
+    # type: (Dict[str, Any]) -> int
+    """计算总切换次数"""
+    return data["switch_in_count"] + data["switch_out_count"]
+
+
+def calc_voluntary_rate(data):
+    # type: (Dict[str, Any]) -> float
+    """计算自愿切换比例（百分比）"""
+    total = data["voluntary_count"] + data["involuntary_count"]
+    if total == 0:
+        return 0.0
+    return (data["voluntary_count"] * 100.0) / total
+
+
+# ==================== 上下文切换监控器 ====================
+
+
 @register_monitor("context_switch")
 class ContextSwitchMonitor(BaseMonitor):
-    """上下文切换监控器"""
+    """上下文切换监控器 - 统计聚合模式
+    
+    监控进程上下文切换，统计切换频率和自愿/非自愿切换比例。
+    """
     REQUIRED_TRACEPOINTS = ['sched:sched_switch']  # type: List[str]
+
+    CSV_COLUMNS = [
+        ("comm", "comm"),
+        ("cpu", "cpu"),
+        ("switch_in", "switch_in_count"),
+        ("switch_out", "switch_out_count"),
+        ("total_switches", ("switch_in_count", "switch_out_count"), lambda a, b: a + b),
+        ("voluntary", "voluntary_count"),
+        ("involuntary", "involuntary_count"),
+        ("voluntary_rate", ("voluntary_count", "involuntary_count"),
+         lambda v, inv: "{:.1f}".format((v * 100.0 / (v + inv)) if (v + inv) > 0 else 0.0)),
+    ]
+
+    CONSOLE_FORMAT = (
+        "{:<16} {:<4} {:<8} {:<8} {:<8} {:<10} {:<10} {:<7.1f}%",
+        [
+            "comm", "cpu",
+            "switch_in_count", "switch_out_count",
+            ("switch_in_count", "switch_out_count", lambda a, b: a + b),
+            "voluntary_count", "involuntary_count",
+            ("voluntary_count", "involuntary_count",
+             lambda v, inv: (v * 100.0 / (v + inv)) if (v + inv) > 0 else 0.0),
+        ],
+    )
 
     @classmethod
     def get_default_monitor_config(cls):
@@ -82,69 +128,7 @@ class ContextSwitchMonitor(BaseMonitor):
     def should_collect(self, key, value):
         # type: (ContextSwitchKey, ContextSwitchValue) -> bool
         """判断是否应该收集数据"""
-        # 过滤：最小切换次数
         total_switches = value.switch_in_count + value.switch_out_count
         if total_switches < self.min_switches:
             return False
         return True
-
-    @staticmethod
-    def calc_total_switches(data):
-        # type: (Dict[str, Any]) -> int
-        """计算总切换次数"""
-        return data["switch_in_count"] + data["switch_out_count"]
-
-    @staticmethod
-    def calc_voluntary_rate(data):
-        # type: (Dict[str, Any]) -> float
-        """计算自愿切换比例（百分比）"""
-        total = data["voluntary_count"] + data["involuntary_count"]
-        if total == 0:
-            return 0.0
-        return (data["voluntary_count"] * 100.0) / total
-
-    # ==================== 格式化方法实现 ====================
-
-    def monitor_csv_header(self):
-        # type: () -> List[str]
-        """获取CSV头部字段"""
-        return [
-            'comm', 'cpu',
-            'switch_in', 'switch_out', 'total_switches',
-            'voluntary', 'involuntary', 'voluntary_rate'
-        ]
-
-    def monitor_csv_data(self, data):
-        # type: (Dict[str, Any]) -> Dict[str, Any]
-        """格式化为CSV行"""
-        return {
-            "comm": data["comm"],
-            "cpu": data["cpu"],
-            "switch_in": data["switch_in_count"],
-            "switch_out": data["switch_out_count"],
-            "total_switches": ContextSwitchMonitor.calc_total_switches(data),
-            "voluntary": data["voluntary_count"],
-            "involuntary": data["involuntary_count"],
-            "voluntary_rate": "{:.1f}".format(ContextSwitchMonitor.calc_voluntary_rate(data))
-        }
-
-    def monitor_console_header(self):
-        # type: () -> str
-        """获取控制台输出的表头"""
-        return "{:<16} {:<4} {:<8} {:<8} {:<8} {:<10} {:<10} {:<8}".format(
-            "COMM", "CPU", "IN", "OUT", "TOTAL", "VOLUNTARY", "INVOLUNTARY", "VOL%"
-        )
-
-    def monitor_console_data(self, data):
-        # type: (Dict[str, Any]) -> str
-        """将事件数据格式化为控制台输出"""
-        return "{:<16} {:<4} {:<8} {:<8} {:<8} {:<10} {:<10} {:<7.1f}%".format(
-            data["comm"],
-            data["cpu"],
-            data["switch_in_count"],
-            data["switch_out_count"],
-            ContextSwitchMonitor.calc_total_switches(data),
-            data["voluntary_count"],
-            data["involuntary_count"],
-            ContextSwitchMonitor.calc_voluntary_rate(data)
-        )

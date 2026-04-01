@@ -161,31 +161,18 @@ int trace_func_{func_id} (struct pt_regs *ctx) {{
 
     # ==================== 格式化方法实现 ====================
 
-    def monitor_csv_header(self):
-        # type: () -> List[str]
-        """获取CSV头部字段"""
-        return ["comm", "func_name", "count"]
+    def _resolve_func_name(self, func_id):
+        # type: (int) -> str
+        """根据func_id解析函数名（需访问实例属性 matched_functions）"""
+        return self.matched_functions.get(func_id, "unknown_{}".format(func_id))
 
-    def monitor_csv_data(self, data):
-        # type: (Dict[str, Any]) -> Dict[str, Any]
-        """将事件数据格式化为CSV行数据"""
-        # 处理字节字符串
-        return {
-            "comm": data["comm"],
-            "func_name": self.matched_functions.get(data["func_id"], "unknown_{}".format(data["func_id"])),
-            "count": data["count"]
-        }
+    CSV_COLUMNS = [
+        ("comm", "comm"),
+        ("func_name", "func_id", _resolve_func_name),
+        ("count", "count"),
+    ]
 
-    def monitor_console_header(self):
-        # type: () -> str
-        """获取控制台输出的表头"""
-        return "{:<16} {:<32} {}".format("COMMAND", "FUNCTION", "COUNT")
-
-    def monitor_console_data(self, data):
-        # type: (Dict[str, Any]) -> str
-        """将事件数据格式化为控制台输出"""
-        return "{:<16} {:<32} {}".format(
-            data["comm"],
-            self.matched_functions.get(data["func_id"], "unknown_{}".format(data["func_id"])),
-            data["count"]
-        )
+    CONSOLE_FORMAT = (
+        "{:<16} {:<32} {}",
+        ["comm", ("func_id", _resolve_func_name), "count"],
+    )

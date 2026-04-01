@@ -5,6 +5,10 @@ eBPF监控器基类
 
 提供所有监控器的共同接口和实现，定义标准的监控流程。
 子类只需实现特定的抽象方法即可快速创建新的监控器。
+
+监控器模式：
+- STATISTICAL: 统计聚合模式，定期从BPF表读取统计数据
+- EVENT: 事件驱动模式，实时处理perf_buffer事件
 """
 
 # 标准库导入
@@ -13,9 +17,14 @@ from threading import Thread, Event
 
 # 兼容性导入
 try:
-    from abc import ABC
+    from abc import ABC, abstractmethod
 except ImportError:
     from ..utils.py2_compat import ABC
+    abstractmethod = lambda f: f
+try:
+    from enum import Enum
+except ImportError:
+    from ..utils.py2_compat import Enum
 try:
     from pathlib import Path
 except ImportError:
@@ -38,12 +47,23 @@ from ..utils.decorators import MONITOR_REGISTRY, require_bpf_loaded
 from ..utils.monitor_context import MonitorContext
 
 
+class MonitorMode(Enum):
+    """监控器模式枚举
+    
+    定义监控器的数据收集方式：
+    - STATISTICAL: 统计聚合模式，定期从内核BPF表读取聚合数据
+    - EVENT: 事件驱动模式，实时处理perf_buffer事件
+    """
+    STATISTICAL = "statistical"  # 统计聚合模式（bio, syscall, func, interrupt, page_fault, context_switch, open）
+    EVENT = "event"  # 事件驱动模式（exec）
+
+
 class BaseMonitor(ABC):
     """eBPF监控器基类
 
     定义了所有eBPF监控器的通用接口和实现。
     子类需要实现抽象方法来提供特定的监控功能。
-    @register_monitor("base")
+    
     基本使用方法（按顺序）：
     BaseMonitor.validate_config(config)  # 解析、验证配置
     monitor = BaseMonitor(config)        # 初始化监控器
@@ -77,7 +97,7 @@ class BaseMonitor(ABC):
     def get_default_monitor_config(cls):
         # type: () -> Dict[str, Any]
         """
-        获取监控器默认配置
+        获取监控器特定的默认配置
 
         子类可以重写此方法来提供特定的默认配置
 
@@ -125,7 +145,7 @@ class BaseMonitor(ABC):
     def validate_monitor_config(cls, config):
         # type: (Dict[str, Any]) -> None
         """
-        验证监控器配置
+        验证监控器特定配置
 
         子类需要重写此方法来提供特定的配置验证
 
@@ -193,6 +213,21 @@ class BaseMonitor(ABC):
 
         self.logger.debug("[BaseMonitor] {}监控器初始化完成".format(self.__class__.__name__))
 
+    @property
+    def mode(self):
+        # type: () -> MonitorMode
+        """
+        监控器模式
+        
+        子类必须重写此属性以指定监控器模式。
+        - MonitorMode.STATISTICAL: 统计聚合模式，定期从BPF表读取数据
+        - MonitorMode.EVENT: 事件驱动模式，实时处理perf_buffer事件
+        
+        Returns:
+            MonitorMode: 监控器模式
+        """
+        return MonitorMode.STATISTICAL
+
     def _validate_requirements(self):
         # type: () -> None
         """
@@ -212,7 +247,7 @@ class BaseMonitor(ABC):
         """
         初始化监控器
 
-        子类可以重写此方法来初始化监控器
+        子类可以重写此方法来初始化监控器特定的属性
         """
         pass
 
@@ -250,7 +285,7 @@ class BaseMonitor(ABC):
         """
         获取eBPF程序代码
 
-        子类可以重写此方法来修改代码
+        子类可以重写此方法来修改代码（如动态生成探针）
         """
         with open(str(self.ebpf_file), "r") as f:
             ebpf_code = f.read()
@@ -270,6 +305,10 @@ class BaseMonitor(ABC):
         """
         开始监控
 
+        根据监控器模式启动相应的监控流程：
+        - STATISTICAL: 启动统计定时器线程
+        - EVENT: 启动事件轮询线程
+
         Returns:
             bool: 启动是否成功
         """
@@ -278,21 +317,35 @@ class BaseMonitor(ABC):
             return True
 
         try:
-            # 启动统计定时器线程
             self.stop_event.clear()
             self.monitor_thread = Thread(target=self._monitor_loop)
             self.monitor_thread.daemon = True
             self.monitor_thread.start()
 
             self.running = True
-            self.logger.info("[BaseMonitor] {}监控器启动成功".format(self.__class__.__name__))
+            self.logger.info("[BaseMonitor] {}监控器启动成功 (模式: {})".format(
+                self.__class__.__name__, self.mode.value))
             return True
         except Exception as e:
             self.logger.error("[BaseMonitor] 启动{}监控器失败: {}".format(self.__class__.__name__, e))
             return False
 
     def _monitor_loop(self):
-        """监控循环"""
+        """监控循环
+        
+        根据监控器模式调用不同的数据收集方法：
+        - STATISTICAL: 定时调用 _collect_statistical_data()
+        - EVENT: 轮询调用 _poll_events()
+        """
+        if self.mode == MonitorMode.EVENT:
+            # 事件驱动模式：轮询perf_buffer
+            self._event_monitor_loop()
+        else:
+            # 统计聚合模式：定时收集
+            self._statistical_monitor_loop()
+
+    def _statistical_monitor_loop(self):
+        """统计聚合模式监控循环"""
         while not self.stop_event.is_set():
             # 等待指定的统计周期
             if self.stop_event.wait(self.interval):
@@ -302,6 +355,29 @@ class BaseMonitor(ABC):
                 self._collect_and_output()
             except Exception as e:
                 self.logger.error("[BaseMonitor] 收集统计数据失败: {}".format(e))
+
+    def _event_monitor_loop(self):
+        """事件驱动模式监控循环
+        
+        子类可以重写此方法以自定义事件轮询逻辑。
+        默认实现调用 _poll_events() 方法。
+        """
+        while not self.stop_event.is_set():
+            try:
+                self._poll_events()
+            except Exception as e:
+                self.logger.error("[BaseMonitor] 处理事件失败: {}".format(e))
+                # 短暂休眠后重试，避免错误循环消耗CPU
+                if not self.stop_event.is_set():
+                    self.stop_event.wait(0.1)
+
+    def _poll_events(self):
+        """轮询事件
+        
+        事件驱动模式的监控器需要重写此方法。
+        默认实现从BPF表读取统计数据（与统计模式相同）。
+        """
+        self._collect_and_output()
 
     @require_bpf_loaded
     def stop(self):
@@ -407,28 +483,124 @@ class BaseMonitor(ABC):
         return self.running
 
     # ==================== 格式化方法接口 ====================
-    # 允许子类重写以提供自定义的输出格式
+    # 子类有三种方式提供格式化逻辑（优先级从高到低）：
+    #
+    # 方式1（最简洁）：声明 CSV_COLUMNS 和 CONSOLE_FORMAT
+    #   CSV_COLUMNS 支持3种格式:
+    #     ("列名", "数据键")                        — 简单映射
+    #     ("列名", "数据键", transform_fn)           — 单键转换
+    #     ("列名", ("键1","键2"), transform_fn)      — 多键转换
+    #   CONSOLE_FORMAT 支持3种格式:
+    #     ("格式串", ["键1", "键2"])                  — 简单格式化
+    #     ("格式串", [("键1", fn), "键2"])            — 混合模式
+    #     ("格式串", [("键1", fn), (("k1","k2"),fn)]) — 全转换
+    #   基类自动完成所有格式化，子类无需重写任何方法
+    #
+    # 方式2（灵活）：重写 monitor_csv_header/monitor_csv_data 和
+    #              monitor_console_header/monitor_console_data 四个方法
+    #
+    # 方式3（完全控制）：直接重写 format_for_csv / format_for_console
+
+    # 声明式CSV列定义
+    # 支持3种格式:
+    #   ("col", "key")                        — 简单映射 data[key]
+    #   ("col", "key", fn)                    — 转换 fn(data[key])
+    #   ("col", ("k1","k2"), fn)              — 多键 fn(data[k1], data[k2])
+    # 转换函数可以是：
+    #   - 无状态纯函数（模块级定义）
+    #   - 实例方法（self.xxx），通过子类中定义方法后在CSV_COLUMNS中引用
+    #     例: class MyMonitor:
+    #           def _fmt_xxx(self, v): return self.lookup[v]
+    #           CSV_COLUMNS = [("xxx", "key", _fmt_xxx)]
+    CSV_COLUMNS = []  # type: List[tuple]
+
+    # 声明式控制台格式
+    # 支持3种格式:
+    #   ("fmt", ["k1", "k2"])                 — 简单映射
+    #   ("fmt", [("k1", fn), "k2"])           — 混合模式
+    #   ("fmt", [("k1", fn), (("k1","k2"), fn)]) — 全转换
+    # 转换函数同CSV_COLUMNS，支持实例方法
+    CONSOLE_FORMAT = None  # type: tuple
 
     def get_csv_header(self):
         # type: () -> List[str]
         """
         获取CSV头部字段
 
-        子类需要重写此方法以提供特定的CSV头部字段
-
         Returns:
             List[str]: CSV头部字段列表
         """
         return ["timestamp", "time_str"] + self.monitor_csv_header()
+
+    @staticmethod
+    def _is_class_defined_method(fn, cls):
+        # type: (Any, type) -> bool
+        """
+        检查 fn 是否是类 cls 中直接定义的方法（未绑定方法引用）。
+        
+        用于区分：
+        - 模块级纯函数（如 io_type_to_str）→ 不需要 self
+        - 类中定义的方法引用（如 self._fmt_xxx）→ 需要 self
+        """
+        if cls is None:
+            return False
+        # 检查函数是否直接定义在该类（而非基类）的 __dict__ 中
+        for name, member in cls.__dict__.items():
+            if member is fn:
+                return True
+        return False
+
+    def _apply_transform(self, fn, args, col_cls):
+        # type: (Any, list, type) -> Any
+        """
+        调用转换函数，自动判断是否需要传入 self。
+        
+        如果 fn 是在 col_cls 类中直接定义的方法引用，则传入 self。
+        否则作为普通函数调用。
+        """
+        if self._is_class_defined_method(fn, col_cls):
+            return fn(self, *args)
+        return fn(*args)
+
+    def _apply_csv_column(self, col, data):
+        # type: (tuple, Dict[str, Any]) -> Any
+        """
+        根据CSV列定义从data中提取值。
+
+        支持3种列定义格式:
+          ("col", "key")                    -> data.get("key", "")
+          ("col", "key", fn)                -> fn(data.get("key", ""))
+          ("col", ("k1","k2"), fn)          -> fn(data.get("k1"), data.get("k2"))
+
+        fn 可以是：
+        - 模块级纯函数（如 io_type_to_str）→ 直接调用 fn(*args)
+        - 类中定义的方法引用（如 MyMonitor._fmt_xxx）→ 调用 fn(self, *args)
+        """
+        if len(col) == 2:
+            return data.get(col[1], "")
+        elif len(col) >= 3:
+            keys = col[1]
+            fn = col[2]
+            if isinstance(keys, (tuple, list)):
+                args = [data.get(k, "") for k in keys]
+            else:
+                args = [data.get(keys, "")]
+            return self._apply_transform(fn, args, type(self))
+        return ""
 
     def monitor_csv_header(self):
         # type: () -> List[str]
         """
         获取监控器CSV头部字段
 
+        如果子类声明了 CSV_COLUMNS，自动从中提取列名。
+        否则子类需重写此方法。
+
         Returns:
             List[str]: CSV头部字段列表
         """
+        if self.CSV_COLUMNS:
+            return [col[0] for col in self.CSV_COLUMNS]
         return []
 
     def format_for_csv(self, data):
@@ -453,7 +625,9 @@ class BaseMonitor(ABC):
         """
         将事件数据格式化为CSV行数据
 
-        子类需要重写此方法以提供特定的CSV数据格式化逻辑
+        如果子类声明了 CSV_COLUMNS，自动从中提取数据。
+        支持带转换函数的列定义: ("col_name", "key", fn)
+        否则子类需重写此方法。
 
         Args:
             data: 数据
@@ -461,6 +635,8 @@ class BaseMonitor(ABC):
         Returns:
             Dict[str, Any]: CSV行数据字典
         """
+        if self.CSV_COLUMNS:
+            return {col[0]: self._apply_csv_column(col, data) for col in self.CSV_COLUMNS}
         return {k: v for k, v in data.items() if k not in ["timestamp", "time_str"]}
 
     def get_console_header(self):
@@ -478,11 +654,14 @@ class BaseMonitor(ABC):
         """
         获取控制台输出的表头
 
-        子类需要重写此方法以提供特定的控制台表头格式
+        如果子类声明了 CONSOLE_FORMAT，自动使用其表头部分。
+        否则子类需重写此方法。
 
         Returns:
             str: 控制台表头字符串
         """
+        if self.CONSOLE_FORMAT:
+            return self.CONSOLE_FORMAT[0]
         return ""
 
     def format_for_console(self, data):
@@ -498,8 +677,31 @@ class BaseMonitor(ABC):
         """
         timestamp = data["timestamp"]
         time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
-
         return "{:<22} {}".format(time_str, self.monitor_console_data(data))
+
+    def _apply_console_column(self, item, data):
+        # type: (Any, Dict[str, Any]) -> Any
+        """
+        根据控制台列定义从data中提取值。
+
+        支持3种列定义格式:
+          "key"                         -> data.get("key", "")
+          ("key", fn)                   -> fn(data.get("key", ""))
+          (("k1","k2"), fn)             -> fn(data.get("k1"), data.get("k2"))
+
+        fn 可以是：
+        - 模块级纯函数（如 io_type_to_str）→ 直接调用 fn(*args)
+        - 类中定义的方法引用（如 MyMonitor._fmt_xxx）→ 调用 fn(self, *args)
+        """
+        if isinstance(item, tuple) and len(item) >= 2 and callable(item[1]):
+            keys = item[0]
+            fn = item[1]
+            if isinstance(keys, (tuple, list)):
+                args = [data.get(k, "") for k in keys]
+            else:
+                args = [data.get(keys, "")]
+            return self._apply_transform(fn, args, type(self))
+        return data.get(item, "")
 
     # noinspection PyUnusedLocal
     def monitor_console_data(self, data):
@@ -507,7 +709,9 @@ class BaseMonitor(ABC):
         """
         将事件数据格式化为控制台输出
 
-        子类需要重写此方法以提供特定的控制台数据格式化逻辑
+        如果子类声明了 CONSOLE_FORMAT，自动从中提取数据并格式化。
+        支持带转换函数的列定义: ("key", fn)
+        否则子类需重写此方法。
 
         Args:
             data: 数据
@@ -515,4 +719,12 @@ class BaseMonitor(ABC):
         Returns:
             str: 格式化后的控制台输出字符串
         """
+        if self.CONSOLE_FORMAT:
+            fmt_str = self.CONSOLE_FORMAT[0]
+            keys = self.CONSOLE_FORMAT[1]
+            values = [self._apply_console_column(k, data) for k in keys]
+            try:
+                return fmt_str.format(*values)
+            except (IndexError, KeyError):
+                return " | ".join(str(v) for v in values)
         return ""
