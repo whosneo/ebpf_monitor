@@ -12,6 +12,7 @@ eBPF监控器基类
 """
 
 # 标准库导入
+import re
 import time
 from threading import Thread, Event
 
@@ -490,10 +491,13 @@ class BaseMonitor(ABC):
     #     ("列名", "数据键")                        — 简单映射
     #     ("列名", "数据键", transform_fn)           — 单键转换
     #     ("列名", ("键1","键2"), transform_fn)      — 多键转换
-    #   CONSOLE_FORMAT 支持3种格式:
-    #     ("格式串", ["键1", "键2"])                  — 简单格式化
-    #     ("格式串", [("键1", fn), "键2"])            — 混合模式
-    #     ("格式串", [("键1", fn), (("k1","k2"),fn)]) — 全转换
+    #   CONSOLE_FORMAT 支持2种元组格式:
+    #     二元组（向后兼容）:
+    #       ("格式串", ["键1", "键2"])                  — 简单格式化
+    #       ("格式串", [("键1", fn), "键2"])            — 混合模式
+    #     三元组（推荐，自动表头）:
+    #       ("格式串", ["键1", "键2"], ["标题1", "标题2"]) — 自动表头+格式化
+    #       ("格式串", [("键1", fn), "键2"], ["标题1", "标题2"]) — 混合模式+表头
     #   基类自动完成所有格式化，子类无需重写任何方法
     #
     # 方式2（灵活）：重写 monitor_csv_header/monitor_csv_data 和
@@ -515,22 +519,17 @@ class BaseMonitor(ABC):
     CSV_COLUMNS = []  # type: List[tuple]
 
     # 声明式控制台格式
-    # 支持3种格式:
-    #   ("fmt", ["k1", "k2"])                 — 简单映射
-    #   ("fmt", [("k1", fn), "k2"])           — 混合模式
-    #   ("fmt", [("k1", fn), (("k1","k2"), fn)]) — 全转换
+    # 支持2种元组格式:
+    #   二元组（向后兼容）:
+    #     ("fmt", ["k1", "k2"])                        — 简单映射
+    #     ("fmt", [("k1", fn), "k2"])                  — 混合模式
+    #     ("fmt", [("k1", fn), (("k1","k2"), fn)])     — 全转换
+    #   三元组（推荐，自动表头）:
+    #     ("fmt", ["k1", "k2"], ["COL1", "COL2"])      — 简单映射+表头
+    #     ("fmt", [("k1", fn), "k2"], ["COL1", "COL2"]) — 混合模式+表头
+    # 第3个元素是列标题列表，与第2个元素一一对应。
     # 转换函数同CSV_COLUMNS，支持实例方法
     CONSOLE_FORMAT = None  # type: tuple
-
-    def get_csv_header(self):
-        # type: () -> List[str]
-        """
-        获取CSV头部字段
-
-        Returns:
-            List[str]: CSV头部字段列表
-        """
-        return ["timestamp", "time_str"] + self.monitor_csv_header()
 
     @staticmethod
     def _is_class_defined_method(fn, cls):
@@ -562,42 +561,72 @@ class BaseMonitor(ABC):
             return fn(self, *args)
         return fn(*args)
 
-    def _apply_csv_column(self, col, data):
-        # type: (tuple, Dict[str, Any]) -> Any
-        """
-        根据CSV列定义从data中提取值。
+    # ==================== 数据提取与格式化 ====================
 
-        支持3种列定义格式:
-          ("col", "key")                    -> data.get("key", "")
-          ("col", "key", fn)                -> fn(data.get("key", ""))
-          ("col", ("k1","k2"), fn)          -> fn(data.get("k1"), data.get("k2"))
+    def _extract_column_value(self, col_def, data):
+        # type: (Any, Dict[str, Any]) -> Any
+        """
+        根据列定义从data中提取值。
+
+        统一处理CSV_COLUMNS和CONSOLE_FORMAT的列定义，支持以下格式:
+          "key"                         -> data.get("key", "")
+          ("key", fn)                   -> fn(data.get("key", ""))
+          (("k1", "k2"), fn)           -> fn(data.get("k1"), data.get("k2"))
 
         fn 可以是：
         - 模块级纯函数（如 io_type_to_str）→ 直接调用 fn(*args)
         - 类中定义的方法引用（如 MyMonitor._fmt_xxx）→ 调用 fn(self, *args)
         """
-        if len(col) == 2:
-            return data.get(col[1], "")
-        elif len(col) >= 3:
-            keys = col[1]
-            fn = col[2]
+        if isinstance(col_def, tuple) and len(col_def) >= 2 and callable(col_def[1]):
+            keys = col_def[0]
+            fn = col_def[1]
             if isinstance(keys, (tuple, list)):
                 args = [data.get(k, "") for k in keys]
             else:
                 args = [data.get(keys, "")]
             return self._apply_transform(fn, args, type(self))
-        return ""
+        # 简单 key 映射: "key" 或 ("col", "key") 的第二项
+        if isinstance(col_def, (list, tuple)) and len(col_def) >= 2:
+            return data.get(col_def[1], "")
+        return data.get(col_def, "")
+
+    @staticmethod
+    def _strip_numeric_format(fmt_str):
+        # type: (str) -> str
+        """
+        将格式字符串中的数字类型符降级为字符串格式。
+
+        用于表头生成，避免字符串类型的表头文字触发数字格式化错误。
+        如 {:<7.1f}% → {:<7}% 、 {:>8.1f} → {:>8}
+        """
+        return re.sub(
+            r'\{([^}]*?)(?:\.[0-9]+)?[dfFeEgGn]([^}]*?)\}',
+            r'{\1\2}',
+            fmt_str
+        )
+
+    # ==================== CSV 格式化 ====================
+
+    def get_csv_header(self):
+        # type: () -> List[str]
+        """
+        获取CSV头部字段列表。
+
+        Returns:
+            List[str]: CSV头部字段列表（含 timestamp 和 time_str）
+        """
+        return ["timestamp", "time_str"] + self.monitor_csv_header()
 
     def monitor_csv_header(self):
         # type: () -> List[str]
         """
-        获取监控器CSV头部字段
+        获取监控器CSV头部字段。
 
         如果子类声明了 CSV_COLUMNS，自动从中提取列名。
         否则子类需重写此方法。
 
         Returns:
-            List[str]: CSV头部字段列表
+            List[str]: 监控器CSV头部字段列表
         """
         if self.CSV_COLUMNS:
             return [col[0] for col in self.CSV_COLUMNS]
@@ -606,10 +635,10 @@ class BaseMonitor(ABC):
     def format_for_csv(self, data):
         # type: (Dict[str, Any]) -> Dict[str, Any]
         """
-        将事件数据格式化为CSV行数据
+        将事件数据格式化为CSV行数据。
 
         Args:
-            data: 数据
+            data: 原始事件数据
 
         Returns:
             Dict[str, Any]: CSV行数据字典
@@ -623,26 +652,29 @@ class BaseMonitor(ABC):
     def monitor_csv_data(self, data):
         # type: (Dict[str, Any]) -> Dict[str, Any]
         """
-        将事件数据格式化为CSV行数据
+        将事件数据格式化为CSV行数据。
 
         如果子类声明了 CSV_COLUMNS，自动从中提取数据。
-        支持带转换函数的列定义: ("col_name", "key", fn)
         否则子类需重写此方法。
 
         Args:
-            data: 数据
+            data: 原始事件数据
 
         Returns:
             Dict[str, Any]: CSV行数据字典
         """
         if self.CSV_COLUMNS:
-            return {col[0]: self._apply_csv_column(col, data) for col in self.CSV_COLUMNS}
+            return {col[0]: self._extract_column_value(col, data) for col in self.CSV_COLUMNS}
         return {k: v for k, v in data.items() if k not in ["timestamp", "time_str"]}
+
+    # ==================== 控制台格式化 ====================
 
     def get_console_header(self):
         # type: () -> str
         """
-        获取控制台输出的表头
+        获取控制台输出的表头。
+
+        基类自动拼接 TIME 前缀与监控器表头。
 
         Returns:
             str: 格式化后的控制台表头字符串
@@ -652,25 +684,39 @@ class BaseMonitor(ABC):
     def monitor_console_header(self):
         # type: () -> str
         """
-        获取控制台输出的表头
+        获取监控器控制台表头。
 
-        如果子类声明了 CONSOLE_FORMAT，自动使用其表头部分。
+        如果 CONSOLE_FORMAT 为三元组 (fmt, keys, headers)，自动使用 headers 列表
+        格式化为表头文字，数字格式自动降级为字符串格式。
+        如果为二元组 (fmt, keys)，返回格式字符串（向后兼容）。
         否则子类需重写此方法。
 
         Returns:
-            str: 控制台表头字符串
+            str: 监控器控制台表头字符串
         """
         if self.CONSOLE_FORMAT:
-            return self.CONSOLE_FORMAT[0]
+            fmt_str = self.CONSOLE_FORMAT[0]
+            # 三元组: (format_str, keys, headers)
+            if len(self.CONSOLE_FORMAT) >= 3:
+                headers = self.CONSOLE_FORMAT[2]
+                header_fmt = self._strip_numeric_format(fmt_str)
+                try:
+                    return header_fmt.format(*headers)
+                except (IndexError, KeyError):
+                    return " | ".join(str(h) for h in headers)
+            # 二元组（向后兼容）: 返回格式字符串
+            return fmt_str
         return ""
 
     def format_for_console(self, data):
         # type: (Dict[str, Any]) -> str
         """
-        将事件数据格式化为控制台输出
+        将事件数据格式化为控制台输出行。
+
+        自动拼接时间戳与监控器数据行。
 
         Args:
-            data: 数据
+            data: 原始事件数据
 
         Returns:
             str: 格式化后的控制台输出字符串
@@ -679,50 +725,24 @@ class BaseMonitor(ABC):
         time_str = "[{}]".format(DataProcessor.format_timestamp(timestamp))
         return "{:<22} {}".format(time_str, self.monitor_console_data(data))
 
-    def _apply_console_column(self, item, data):
-        # type: (Any, Dict[str, Any]) -> Any
-        """
-        根据控制台列定义从data中提取值。
-
-        支持3种列定义格式:
-          "key"                         -> data.get("key", "")
-          ("key", fn)                   -> fn(data.get("key", ""))
-          (("k1","k2"), fn)             -> fn(data.get("k1"), data.get("k2"))
-
-        fn 可以是：
-        - 模块级纯函数（如 io_type_to_str）→ 直接调用 fn(*args)
-        - 类中定义的方法引用（如 MyMonitor._fmt_xxx）→ 调用 fn(self, *args)
-        """
-        if isinstance(item, tuple) and len(item) >= 2 and callable(item[1]):
-            keys = item[0]
-            fn = item[1]
-            if isinstance(keys, (tuple, list)):
-                args = [data.get(k, "") for k in keys]
-            else:
-                args = [data.get(keys, "")]
-            return self._apply_transform(fn, args, type(self))
-        return data.get(item, "")
-
-    # noinspection PyUnusedLocal
     def monitor_console_data(self, data):
         # type: (Dict[str, Any]) -> str
         """
-        将事件数据格式化为控制台输出
+        将事件数据格式化为控制台数据行。
 
         如果子类声明了 CONSOLE_FORMAT，自动从中提取数据并格式化。
-        支持带转换函数的列定义: ("key", fn)
         否则子类需重写此方法。
 
         Args:
-            data: 数据
+            data: 原始事件数据
 
         Returns:
-            str: 格式化后的控制台输出字符串
+            str: 格式化后的控制台数据字符串
         """
         if self.CONSOLE_FORMAT:
             fmt_str = self.CONSOLE_FORMAT[0]
             keys = self.CONSOLE_FORMAT[1]
-            values = [self._apply_console_column(k, data) for k in keys]
+            values = [self._extract_column_value(k, data) for k in keys]
             try:
                 return fmt_str.format(*values)
             except (IndexError, KeyError):

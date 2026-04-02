@@ -119,7 +119,7 @@ class PageFaultMonitor(BaseMonitor):
     ]
 
     CONSOLE_FORMAT = (
-        "{:<16} {:<22} {:<3} {:<4} {:<10}",
+        "{:<16} {:<22} {:>3} {:>4} {:>10}",
         [
             "comm",
             ("fault_type", fault_type_to_str),
@@ -127,6 +127,7 @@ class PageFaultMonitor(BaseMonitor):
             ("cpu", _get_numa_node),
             "count",
         ],
+        ["COMM", "FAULT_TYPE", "CPU", "NUMA", "COUNT"],
     )
 
     def _initialize(self, config):

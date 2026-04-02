@@ -173,6 +173,7 @@ int trace_func_{func_id} (struct pt_regs *ctx) {{
     ]
 
     CONSOLE_FORMAT = (
-        "{:<16} {:<32} {}",
+        "{:<16} {:<32} {:>}",
         ["comm", ("func_id", _resolve_func_name), "count"],
+        ["COMM", "FUNC", "COUNT"],
     )

@@ -57,10 +57,11 @@ class ExecMonitor(BaseMonitor):
         ("filename", "filename"),
     ]
 
-    # 声明式控制台格式：("表头格式", [数据键列表])
+    # 声明式控制台格式：("表头格式", [数据键列表], [列标题列表])
     CONSOLE_FORMAT = (
-        "{:<6} {:<8} {:<16} {}",
+        "{:>6} {:>8} {:<16} {}",
         ["uid", "pid", "comm", "filename"],
+        ["UID", "PID", "COMM", "FILENAME"],
     )
 
     @property
