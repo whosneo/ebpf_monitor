@@ -57,6 +57,11 @@ class DaemonManager:
         self.log_manager = log_manager
         self.logger = log_manager.get_logger(self)
 
+        # 确保 base_dir 是绝对路径
+        if not base_dir.is_absolute():
+            self.logger.warning("base_dir 不是绝对路径，将转换为绝对路径: {}".format(base_dir))
+            base_dir = base_dir.resolve()
+
         # PID文件路径（基于项目根目录的绝对路径）
         if Path(pid_file).is_absolute():
             self.pid_file = Path(pid_file)
@@ -94,6 +99,9 @@ class DaemonManager:
 
             self.logger.info("开始守护进程化...")
 
+            # 在第一次 fork 前忽略 SIGHUP，避免竞态条件
+            signal.signal(signal.SIGHUP, signal.SIG_IGN)
+
             # 第一次fork
             pid = os.fork()
             if pid > 0:
@@ -107,7 +115,7 @@ class DaemonManager:
                 # Python 2/3 兼容：某些系统可能返回None
                 if sid is not None and sid < 0:
                     self.logger.error("setsid失败")
-                    sys.exit(1)
+                    os._exit(1)
 
                 # 记录会话ID（如果可用）
                 if sid is not None:
@@ -116,7 +124,7 @@ class DaemonManager:
                     self.logger.debug("创建新会话成功")
             except OSError as e:
                 self.logger.error("setsid失败: {}".format(e))
-                sys.exit(1)
+                os._exit(1)
 
             # 第二次fork
             pid = os.fork()
@@ -150,25 +158,24 @@ class DaemonManager:
     @staticmethod
     def _redirect_standard_streams():
         """
-        重定向标准输入输出到/dev/null
-        
-        保持/dev/null文件描述符打开，避免过早关闭导致的问题。
+        重定向标准输入输出到 /dev/null
+
+        使用 os.open 获取文件描述符，dup2 后关闭原始描述符，避免泄漏。
         """
         # 刷新缓冲区
         sys.stdout.flush()
         sys.stderr.flush()
 
-        # 打开/dev/null（不使用with，保持打开直到进程结束）
-        null_in = open('/dev/null', 'r')
-        null_out = open('/dev/null', 'w')
+        # 使用 os.open 获取文件描述符
+        null_fd = os.open('/dev/null', os.O_RDWR)
 
         # 重定向标准流
-        os.dup2(null_in.fileno(), sys.stdin.fileno())
-        os.dup2(null_out.fileno(), sys.stdout.fileno())
-        os.dup2(null_out.fileno(), sys.stderr.fileno())
+        os.dup2(null_fd, sys.stdin.fileno())
+        os.dup2(null_fd, sys.stdout.fileno())
+        os.dup2(null_fd, sys.stderr.fileno())
 
-        # 注意：不关闭null_in和null_out
-        # 它们会在进程结束时自动关闭
+        # 关闭原始文件描述符
+        os.close(null_fd)
 
     def is_running(self):
         # type: () -> bool
@@ -267,12 +274,13 @@ class DaemonManager:
                         with open(str(log_file), 'r') as f:
                             f.seek(initial_size)
                             no_data_count = 0
+                            max_no_data = 50  # 最大无数据计数（5秒）
 
                             while not monitor_stop_event.is_set():
                                 line = f.readline()
                                 if line:
                                     # 输出到控制台（用户交互）
-                                    print("守护进程: {}".format(line.strip()))
+                                    print("{}".format(line.strip()))
                                     no_data_count = 0
                                 else:
                                     time.sleep(0.1)
@@ -280,6 +288,10 @@ class DaemonManager:
 
                                     # 进程已停止且无新数据
                                     if not self.is_running() and no_data_count >= 20:
+                                        break
+                                    # 超过最大等待时间
+                                    if no_data_count >= max_no_data:
+                                        self.logger.debug("日志监控超时")
                                         break
 
                     except IOError as e:
@@ -403,6 +415,12 @@ class DaemonManager:
             self.pid_file_handle.write(str(os.getpid()) + '\n')
             self.pid_file_handle.flush()
             os.fsync(self.pid_file_handle.fileno())
+
+            # 设置 PID 文件权限为 644
+            try:
+                os.chmod(str(self.pid_file), 0o644)
+            except OSError as e:
+                self.logger.warning("设置 PID 文件权限失败: {}".format(e))
 
             # 注意：不关闭文件句柄，保持锁直到进程结束
             # 锁会在进程退出或文件句柄关闭时自动释放

@@ -99,7 +99,7 @@ class ExecMonitor(BaseMonitor):
                 break
             except Exception as e:
                 last_error = e
-                self.logger.debug("尝试附加到 {} 失败: {}".format(symbol, e))
+                self.logger.debug("无法附加到 {}，跳过: {}".format(symbol, e))
                 continue
 
         if not attached:

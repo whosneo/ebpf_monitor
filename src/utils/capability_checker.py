@@ -12,6 +12,7 @@ import errno
 import os
 import platform
 import subprocess
+import sys
 
 # 兼容性导入
 try:
@@ -215,6 +216,22 @@ class CapabilityChecker:
         """
         return os.geteuid() == 0
 
+    @staticmethod
+    def check_os_compatibility():
+        # type: () -> bool
+        """
+        检查操作系统兼容性
+
+        eBPF 仅支持 Linux 内核，需要验证当前系统是否为 Linux。
+
+        Returns:
+            bool: 是否为 Linux 系统
+        """
+        if sys.platform.startswith('linux'):
+            return True
+        else:
+            return False
+
     def check_ebpf_support(self):
         # type: () -> bool
         """
@@ -329,6 +346,13 @@ class CapabilityChecker:
             bool: 环境是否有效
         """
         self.logger.info("开始环境兼容性验证")
+
+        # 检查操作系统兼容性（最先检查）
+        if not self.check_os_compatibility():
+            self.logger.error(
+                "eBPF 监控工具仅支持 Linux 系统，当前系统: {}".format(sys.platform)
+            )
+            return False
 
         # 检查权限
         if not self.check_root_privileges():
