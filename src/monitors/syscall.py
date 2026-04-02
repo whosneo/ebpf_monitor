@@ -316,15 +316,16 @@ class SyscallMonitor(BaseMonitor):
     ]
 
     CONSOLE_FORMAT = (
-        "{:<16} {:<12} {:<10} {:<8} {:<8} {:<6.1f}%",
+        "{:<16} {:<20} {:<10} {:>8} {:>8} {:>8.1f}%",
         [
             "comm",
             ("syscall_nr", syscall.syscall_name),
             ("syscall_nr", lambda nr: SyscallCategory.classify(nr).value),
             "count",
             "error_count",
-            ("count", "error_count", lambda c, e: (e / float(c)) * 100.0 if c > 0 else 0.0),
+            (("count", "error_count"), lambda c, e: (e / float(c)) * 100.0 if c > 0 else 0.0),
         ],
+        ["COMM", "SYSCALL", "CATEGORY", "COUNT", "ERRORS", "ERR_RATE"],
     )
 
     @classmethod

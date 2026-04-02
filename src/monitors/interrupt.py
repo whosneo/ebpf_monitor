@@ -89,6 +89,7 @@ class InterruptMonitor(BaseMonitor):
     ]
 
     CONSOLE_FORMAT = (
-        "{:<16} {:<10} {:<3} {}",
+        "{:<16} {:<10} {:>3} {:>}",
         [("comm", lambda v: v if v else "N/A"), ("irq_type", irq_type_to_str), "cpu", "count"],
+        ["COMM", "IRQ_TYPE", "CPU", "COUNT"],
     )

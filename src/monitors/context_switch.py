@@ -90,15 +90,16 @@ class ContextSwitchMonitor(BaseMonitor):
     ]
 
     CONSOLE_FORMAT = (
-        "{:<16} {:<4} {:<8} {:<8} {:<8} {:<10} {:<10} {:<7.1f}%",
+        "{:<16} {:>4} {:>8} {:>8} {:>8} {:>10} {:>10} {:>7.1f}%",
         [
             "comm", "cpu",
             "switch_in_count", "switch_out_count",
-            ("switch_in_count", "switch_out_count", lambda a, b: a + b),
+            (("switch_in_count", "switch_out_count"), lambda a, b: a + b),
             "voluntary_count", "involuntary_count",
-            ("voluntary_count", "involuntary_count",
+            (("voluntary_count", "involuntary_count"),
              lambda v, inv: (v * 100.0 / (v + inv)) if (v + inv) > 0 else 0.0),
         ],
+        ["COMM", "CPU", "IN", "OUT", "TOTAL", "VOL", "INVOL", "VOL_RATE"],
     )
 
     @classmethod

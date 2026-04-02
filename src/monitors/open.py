@@ -122,7 +122,7 @@ class OpenMonitor(BaseMonitor):
     ]
 
     CONSOLE_FORMAT = (
-        "{:<16} {:<8} {:<40} {:<8} {:<8} {:<10} {:<10}",
+        "{:<16} {:<8} {:<40} {:>8} {:>8} {:>10} {:<10}",
         [
             "comm",
             ("operation", operation_to_str),
@@ -132,6 +132,7 @@ class OpenMonitor(BaseMonitor):
             (("total_latency_ns", "count"), lambda tln, c: MonitorDataUtils.format_latency_us(MonitorDataUtils.calc_avg_latency_us(tln, c))),
             ("flags_summary", parse_flags),
         ],
+        ["COMM", "OP", "FILENAME", "COUNT", "ERRORS", "AVG_LAT", "FLAGS"],
     )
 
     @classmethod

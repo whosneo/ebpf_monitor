@@ -114,7 +114,7 @@ class BioMonitor(BaseMonitor):
     ]
 
     CONSOLE_FORMAT = (
-        "{:<16} {:<18} {:<8} {:<10} {:<10} {:<10} {:<10} {:<12}",
+        "{:<16} {:<18} {:>8} {:>10} {:>10} {:>10} {:>10} {:>12}",
         [
             "comm",
             ("bio_type", io_type_to_str),
@@ -125,6 +125,7 @@ class BioMonitor(BaseMonitor):
             ("max_ns", lambda ns: MonitorDataUtils.format_latency_ms(MonitorDataUtils.calc_max_latency_us(ns))),
             (("total_bytes", "total_ns"), lambda tb, tn: MonitorDataUtils.format_throughput(MonitorDataUtils.calc_throughput_mbps(tb, tn))),
         ],
+        ["COMM", "IO_TYPE", "COUNT", "SIZE", "AVG_LAT", "MIN_LAT", "MAX_LAT", "THROUGHPUT"],
     )
 
     @classmethod
