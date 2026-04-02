@@ -7,10 +7,11 @@
 根据运行的监控器数量自动选择输出模式：
 - 单个监控器：CSV文件 + 控制台输出
 - 多个监控器：仅CSV文件输出
+
+CSV文件管理和控制台输出委托给CsvWriter和ConsoleWriter。
 """
 
 # 标准库导入
-import csv
 import sys
 import threading
 import time
@@ -26,13 +27,15 @@ try:
 except ImportError:
     from .py2_compat import Path
 try:
-    from typing import Dict, Any, TextIO, List
+    from typing import Dict, Any, List
 except ImportError:
-    from .py2_compat import Dict, Any, TextIO, List
+    from .py2_compat import Dict, Any, List
 
 # 本地模块导入
 from .config_manager import ConfigManager
 from .configs import OutputConfig
+from .csv_writer import CsvWriter
+from .console_writer import ConsoleWriter
 from .log_manager import LogManager
 from ..monitors.base import BaseMonitor
 
@@ -74,10 +77,6 @@ class OutputController:
 
         self.monitors = {}  # type: Dict[str, BaseMonitor]
 
-        # CSV文件管理
-        self.csv_files = {}  # type: Dict[str, TextIO]
-        self.csv_writers = {}  # type: Dict[str, csv.DictWriter]
-
         # 控制标志
         self.running = False
         self.stop_event = threading.Event()
@@ -85,7 +84,6 @@ class OutputController:
 
         # 简化锁机制
         self.registry_lock = threading.Lock()  # 监控器注册/注销锁
-        self.console_lock = threading.Lock()  # 控制台输出锁
         self.buffer_lock = threading.Lock()  # 缓冲区访问锁(保护data_buffer的创建和访问)
 
         # 应用配置
@@ -94,8 +92,11 @@ class OutputController:
         # 缓冲区和批处理相关
         self.data_buffer = defaultdict(lambda: deque(maxlen=self.buffer_size))  # type: Dict[str, deque]
 
-        # 表头输出控制
-        self.header_printed = {}  # type: Dict[str, bool]
+        # 初始化子组件
+        self.csv_writer = CsvWriter(
+            self.output_dir, self.csv_delimiter, self.include_header, self.logger
+        )
+        self.console_writer = ConsoleWriter(self.logger)
 
         self.logger.debug("输出控制器初始化完成")
 
@@ -116,10 +117,10 @@ class OutputController:
         with self.registry_lock:
             self.monitors[monitor_type] = monitor_instance
             # 重置表头标志
-            self.header_printed[monitor_type] = False
+            self.console_writer.reset_header(monitor_type)
 
             self._update_output_mode()
-            self._setup_csv_file(monitor_type)
+            self.csv_writer.setup_file(monitor_type, monitor_instance)
 
             self.logger.debug("注册监控器: {}".format(monitor_type))
 
@@ -130,10 +131,10 @@ class OutputController:
             if monitor_type in self.monitors:
                 self.monitors.pop(monitor_type, None)
                 # 清理表头标志
-                self.header_printed.pop(monitor_type, None)
+                self.console_writer.remove_header(monitor_type)
 
                 self._update_output_mode()
-                self._close_csv_file(monitor_type)
+                self.csv_writer.close_file(monitor_type)
 
                 self.logger.debug("注销监控器: {}".format(monitor_type))
 
@@ -150,72 +151,6 @@ class OutputController:
 
         if old_mode != self.output_mode:
             self.logger.info("输出模式切换: {} -> {}".format(old_mode.name, self.output_mode.name))
-
-    def _setup_csv_file(self, monitor_type):
-        # type: (str) -> None
-        """
-        设置CSV文件
-        
-        创建并打开CSV文件用于监控数据输出，包含异常处理确保资源正确释放
-        """
-        csv_file = None
-        try:
-            # 生成文件名
-            timestamp = time.strftime('%Y%m%d_%H%M%S')
-            filename = "{}_{}.csv".format(monitor_type, timestamp)
-            filepath = self.output_dir / filename
-
-            # 打开文件
-            csv_file = open(str(filepath), 'w')
-
-            # 获取头部
-            header = self.monitors[monitor_type].get_csv_header()
-
-            # 创建writer
-            writer = csv.DictWriter(
-                csv_file,
-                fieldnames=header,
-                delimiter=self.csv_delimiter
-            )
-            if self.include_header:
-                writer.writeheader()
-
-            # 存储引用(只有在成功创建writer后才存储)
-            self.csv_files[monitor_type] = csv_file
-            self.csv_writers[monitor_type] = writer
-
-            self.logger.debug("创建CSV文件: {}".format(filepath))
-
-        except IOError as e:
-            self.logger.error("创建CSV文件失败 {} (I/O错误): {}".format(monitor_type, e))
-            # 关闭已打开的文件句柄
-            if csv_file is not None:
-                try:
-                    csv_file.close()
-                except Exception:
-                    pass
-        except Exception as e:
-            self.logger.error("创建CSV文件失败 {} (未知错误): {}".format(monitor_type, e))
-            # 关闭已打开的文件句柄
-            if csv_file is not None:
-                try:
-                    csv_file.close()
-                except Exception:
-                    pass
-
-    def _close_csv_file(self, monitor_type):
-        # type: (str) -> None
-        """关闭CSV文件"""
-        if monitor_type in self.csv_files:
-            try:
-                self.csv_files[monitor_type].close()
-                self.logger.debug("关闭CSV文件: {}".format(monitor_type))
-            except Exception as e:
-                self.logger.error("关闭CSV文件失败 {}: {}".format(monitor_type, e))
-            finally:
-                # 清理引用，使用pop方法更简洁
-                self.csv_files.pop(monitor_type, None)
-                self.csv_writers.pop(monitor_type, None)
 
     def start(self):
         # type: () -> bool
@@ -294,14 +229,13 @@ class OutputController:
 
             # 刷新并关闭所有文件
             try:
-                self._flush_all()
+                self.csv_writer.flush_all()
             except Exception as e:
                 self.logger.error("刷新文件失败: {}".format(e))
 
         finally:
             # 确保所有文件都被关闭，即使前面步骤出错
-            for monitor_type in list(self.csv_files.keys()):
-                self._close_csv_file(monitor_type)
+            self.csv_writer.cleanup()
 
             self.running = False
             self.logger.info("输出控制器停止成功")
@@ -321,7 +255,7 @@ class OutputController:
 
                 # 定期刷新
                 if current_time - last_flush_time >= self.flush_interval:
-                    self._flush_all()
+                    self.csv_writer.flush_all()
                     last_flush_time = current_time
 
                 time.sleep(self.output_thread_sleep)  # 短暂休眠
@@ -367,66 +301,18 @@ class OutputController:
         # type: (str, List[Dict[str, Any]]) -> None
         """批量处理事件 - 减少I/O系统调用次数"""
         try:
-            # 批量CSV写入
-            if monitor_type in self.csv_writers:
-                self._write_csv_batch(monitor_type, data)
+            # 批量CSV写入（委托给CsvWriter）
+            if self.csv_writer.has_writer(monitor_type):
+                self.csv_writer.write_batch(
+                    monitor_type, data, self.monitors, self.large_batch_threshold
+                )
 
-            # 批量控制台输出
+            # 批量控制台输出（委托给ConsoleWriter）
             if self.output_mode == OutputMode.FILE_AND_CONSOLE:
-                self._write_console_batch(monitor_type, data)
+                self.console_writer.write_batch(monitor_type, data, self.monitors)
 
         except Exception as e:
             self.logger.error("批处理事件失败 {}: {}".format(monitor_type, e))
-
-    def _write_csv_batch(self, monitor_type, data):
-        # type: (str, List[Dict[str, Any]]) -> None
-        """批量CSV写入 - 单一消费者,无需锁"""
-        writer = self.csv_writers[monitor_type]
-        for data_item in data:  # type: Dict[str, Any]
-            try:
-                row_data = self.monitors[monitor_type].format_for_csv(data_item)
-                writer.writerow(row_data)
-            except Exception as e:
-                self.logger.error("CSV写入失败 {}: {}".format(monitor_type, e))
-
-        # 大批次立即刷盘
-        if len(data) >= self.large_batch_threshold:
-            try:
-                self.csv_files[monitor_type].flush()
-            except Exception as e:
-                self.logger.error("CSV刷盘失败 {}: {}".format(monitor_type, e))
-
-    def _write_console_batch(self, monitor_type, data):
-        # type: (str, List[Dict[str, Any]]) -> None
-        """批量控制台输出 - 使用控制台级锁"""
-        with self.console_lock:
-            # 首次输出表头
-            if not self.header_printed.get(monitor_type, False):
-                try:
-                    header = self.monitors[monitor_type].get_console_header()
-                    print(header)
-                    print("-" * (len(header) + 16))
-                    self.header_printed[monitor_type] = True
-                except Exception as e:
-                    self.logger.error("控制台表头输出失败 {}: {}".format(monitor_type, e))
-
-            # 批量输出事件
-            for data_item in data:  # type: Dict[str, Any]
-                try:
-                    console_output = self.monitors[monitor_type].format_for_console(data_item)
-                    print(console_output)
-                    sys.stdout.flush()
-                except Exception as e:
-                    self.logger.error("控制台输出失败 {}: {}".format(monitor_type, e))
-
-    def _flush_all(self):
-        # type: () -> None
-        """刷新所有文件 - 单一消费者,无需锁"""
-        for monitor_type, csv_file in self.csv_files.items():
-            try:
-                csv_file.flush()
-            except Exception as e:
-                self.logger.error("刷新文件失败 {}: {}".format(monitor_type, e))
 
     def cleanup(self):
         # type: () -> None
@@ -436,9 +322,11 @@ class OutputController:
             self.logger.debug("OutputController资源已清理，跳过重复清理")
             return
 
+        # 清理子组件
+        self.csv_writer.cleanup()
+        self.console_writer.cleanup()
+
         # 清理数据结构
-        self.csv_files.clear()
-        self.csv_writers.clear()
         self.data_buffer.clear()
         self.monitors.clear()
 

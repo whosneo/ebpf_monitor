@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     # noinspection PyUnusedImports
     from .application_context import ApplicationContext
 
+# x86_64 eBPF 系统调用号
+SYS_bpf = 321
+
 
 class CapabilityChecker:
     """
@@ -130,7 +133,7 @@ class CapabilityChecker:
 
             # 尝试调用bpf系统调用
             # 使用BPF_PROG_LOAD命令进行测试，这是一个基础的eBPF操作
-            libc.syscall(321, 0, 0, 0)
+            libc.syscall(SYS_bpf, 0, 0, 0)
 
             self.logger.debug("eBPF系统调用支持检查通过")
             return True

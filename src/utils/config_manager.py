@@ -25,7 +25,8 @@ except ImportError:
 import yaml
 
 # 本地模块导入
-from .configs import AppConfig, LogConfig, MonitorsConfig, OutputConfig, ValidatedConfig
+from .configs import AppConfig, LogConfig, OutputConfig, ValidatedConfig
+from .monitors_config import MonitorsConfig
 
 
 class ConfigManager:

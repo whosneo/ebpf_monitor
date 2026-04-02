@@ -23,10 +23,6 @@ import time
 
 # 兼容性导入
 try:
-    from pathlib import Path
-except ImportError:
-    from src.utils.py2_compat import Path
-try:
     from typing import List
 except ImportError:
     from src.utils.py2_compat import List
@@ -59,6 +55,7 @@ def get_version_info():
 
 
 def parse_arguments():
+    # type: () -> argparse.Namespace
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
         description="eBPF性能监控工具",
@@ -119,35 +116,25 @@ def parse_arguments():
     return parser.parse_args()
 
 
-if __name__ == "__main__":
-    """主函数"""
-    # 解析命令行参数
-    args = parse_arguments()
-
-    # 1.初始化应用上下文
-    context = ApplicationContext(args.config)
-    logger = context.get_logger()
-    logger.info("应用上下文初始化完成")
-
-    # 检查必要目录（基于项目根目录的绝对路径）
-    base_dir = context.config_manager.get_base_dir()
-    for dir_name in REQUIRED_DIRS:
-        dir_path = base_dir / dir_name
-        if not dir_path.exists():
-            logger.error("缺少必要的目录: {}".format(dir_path))
-            sys.exit(1)
-
-    # 处理守护进程相关命令
+def handle_daemon_commands(args, context):
+    # type: (argparse.Namespace, ApplicationContext) -> None
+    """
+    处理守护进程相关命令（查询状态、停止）
+    
+    如果处理了命令则退出程序，否则继续执行。
+    
+    Args:
+        args: 命令行参数
+        context: 应用上下文
+    """
     if args.daemon_status:
         if context.daemon_manager.is_running():
             pid = context.daemon_manager.get_daemon_pid()
             print("守护进程正在运行，PID: {}".format(pid))
-            sys.exit(0)
         else:
             print("守护进程未运行")
-            sys.exit(0)
+        sys.exit(0)
 
-    # 停止守护进程
     if args.daemon_stop:
         if context.daemon_manager.stop_daemon():
             print("守护进程停止成功")
@@ -157,47 +144,50 @@ if __name__ == "__main__":
             sys.stderr.write("守护进程停止失败\n")
             sys.exit(1)
 
-    # 设置日志级别（如果 verbose）
-    if args.verbose:
-        logger.info("设置日志级别为DEBUG")
-        context.log_manager.set_level(logging.DEBUG)
-        logger.debug("日志级别已设置为DEBUG")
 
-    # 2.检查内核兼容性
-    checker = context.get_capability_checker()
-    logger.info("系统信息: {}".format(checker.get_system_info()))
-    if not checker.validate_environment():
-        logger.error("环境验证失败")
-        sys.exit(1)
+def validate_selected_monitors(args, monitor_registry, logger):
+    # type: (argparse.Namespace, object, object) -> List[str]
+    """
+    解析并验证用户指定的监控器列表
+    
+    Args:
+        args: 命令行参数
+        monitor_registry: 监控器注册表
+        logger: 日志记录器
+        
+    Returns:
+        选定的监控器名称列表，空列表表示使用所有已注册的监控器
+    """
+    if not args.monitors:
+        return []
 
-    # 3.初始化监控器注册表（预先创建，避免在eBPFMonitor中重复创建）
-    monitor_registry = context.get_monitor_registry()
-    logger.info("监控器注册表初始化完成")
-
-    # 处理daemon模式 - 在创建监控器之前进行daemon化
-    if args.daemon:
-        logger.info("启动守护进程模式...")
-        if not context.daemon_manager.daemonize():
-            logger.error("守护进程化失败")
+    selected = [m.strip() for m in args.monitors.split(",")]
+    available = monitor_registry.get_monitor_names()
+    for monitor in selected:
+        if monitor not in available:
+            logger.error("错误: 未知监控器 '{}'".format(monitor))
+            logger.error("可用监控器: {}".format(', '.join(available)))
             sys.exit(1)
-        # daemonize()成功返回意味着当前是子进程，父进程已退出
-        logger.info("守护进程化成功，PID: {}".format(os.getpid()))
+    return selected
 
-    selected_monitors = []  # type: List[str]
-    if args.monitors:
-        selected_monitors = [m.strip() for m in args.monitors.split(",")]
-        # 验证监控器名称
-        available_monitors = monitor_registry.get_monitor_names()
-        for monitor in selected_monitors:
-            if monitor not in available_monitors:
-                logger.error("错误: 未知监控器 '{}'".format(monitor))
-                logger.error("可用监控器: {}".format(', '.join(available_monitors)))
-                sys.exit(1)
 
-    # 4.解析并验证监控配置
+def run_monitoring(args, context, selected_monitors):
+    # type: (argparse.Namespace, ApplicationContext, List[str]) -> None
+    """
+    运行监控主循环
+    
+    负责创建监控器实例、加载eBPF程序、启动监控、运行主循环和清理资源。
+    
+    Args:
+        args: 命令行参数
+        context: 应用上下文
+        selected_monitors: 选定的监控器列表
+    """
+    logger = context.get_logger()
+
+    # 解析并验证监控配置
     context.config_manager.parse_validate_monitors_config()
 
-    # 5.创建监控工具实例
     ebpf_monitor = None
     try:
         ebpf_monitor = context.get_ebpf_monitor(selected_monitors)
@@ -242,3 +232,57 @@ if __name__ == "__main__":
         # 清理资源
         if ebpf_monitor is not None:
             ebpf_monitor.cleanup()
+
+
+if __name__ == "__main__":
+    """主函数"""
+    # 解析命令行参数
+    args = parse_arguments()
+
+    # 1.初始化应用上下文
+    context = ApplicationContext(args.config)
+    logger = context.get_logger()
+    logger.info("应用上下文初始化完成")
+
+    # 检查必要目录（基于项目根目录的绝对路径）
+    base_dir = context.config_manager.get_base_dir()
+    for dir_name in REQUIRED_DIRS:
+        dir_path = base_dir / dir_name
+        if not dir_path.exists():
+            logger.error("缺少必要的目录: {}".format(dir_path))
+            sys.exit(1)
+
+    # 处理守护进程相关命令
+    handle_daemon_commands(args, context)
+
+    # 设置日志级别（如果 verbose）
+    if args.verbose:
+        logger.info("设置日志级别为DEBUG")
+        context.log_manager.set_level(logging.DEBUG)
+        logger.debug("日志级别已设置为DEBUG")
+
+    # 2.检查内核兼容性
+    checker = context.get_capability_checker()
+    logger.info("系统信息: {}".format(checker.get_system_info()))
+    if not checker.validate_environment():
+        logger.error("环境验证失败")
+        sys.exit(1)
+
+    # 3.初始化监控器注册表（预先创建，避免在eBPFMonitor中重复创建）
+    monitor_registry = context.get_monitor_registry()
+    logger.info("监控器注册表初始化完成")
+
+    # 处理daemon模式 - 在创建监控器之前进行daemon化
+    if args.daemon:
+        logger.info("启动守护进程模式...")
+        if not context.daemon_manager.daemonize():
+            logger.error("守护进程化失败")
+            sys.exit(1)
+        # daemonize()成功返回意味着当前是子进程，父进程已退出
+        logger.info("守护进程化成功，PID: {}".format(os.getpid()))
+
+    # 4.解析并验证监控器选择
+    selected_monitors = validate_selected_monitors(args, monitor_registry, logger)
+
+    # 5.运行监控
+    run_monitoring(args, context, selected_monitors)
