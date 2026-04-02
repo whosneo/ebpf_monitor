@@ -25,7 +25,7 @@ class MonitorContext(object):
     """
 
     def __init__(self, logger, output_controller, ebpf_file_path, compile_flags):
-        # type: (logging.Logger, object, Path, List[str], object) -> None
+        # type: (logging.Logger, object, Path, List[str]) -> None
         """
         初始化监控器上下文
         

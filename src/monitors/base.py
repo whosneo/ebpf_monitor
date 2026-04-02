@@ -43,6 +43,7 @@ except ImportError:
     from bcc import BPF  # pyright: ignore[reportMissingImports]
 
 # 本地模块导入
+from ..utils.config_validator import ConfigValidator
 from ..utils.data_processor import DataProcessor
 from ..utils.decorators import MONITOR_REGISTRY, require_bpf_loaded
 from ..utils.monitor_context import MonitorContext
@@ -125,20 +126,15 @@ class BaseMonitor(ABC):
             raise ValueError("监控器配置必须为字典，当前类型: {}".format(type(config).__name__))
         if len(config) == 0:
             raise ValueError("监控器配置不能为空字典")
-        if config.get("enabled") is None:
-            raise ValueError("配置中缺少必需字段: enabled")
-        if not isinstance(config.get("enabled"), bool):
-            raise ValueError("enabled 必须为布尔值，当前类型: {}".format(type(config.get("enabled")).__name__))
+
+        ConfigValidator.validate_required(config, ["enabled"])
+        ConfigValidator.validate_bool(config.get("enabled"), "enabled")
 
         if not config.get("enabled"):
             return  # 如果监控器未启用，则跳过验证
 
-        if config.get("interval") is None:
-            raise ValueError("监控器配置中缺少必需字段: interval")
-        if not isinstance(config.get("interval"), (int, float)):
-            raise ValueError("interval 必须为数字，当前类型: {}".format(type(config.get("interval")).__name__))
-        if config.get("interval") <= 0:
-            raise ValueError("interval 必须大于 0，当前值: {}".format(config.get("interval")))
+        ConfigValidator.validate_required(config, ["interval"])
+        ConfigValidator.validate_float(config.get("interval"), "interval", min_val=0.001)
 
         cls.validate_monitor_config(config)
 
