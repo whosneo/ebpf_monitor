@@ -108,6 +108,23 @@ class OpenMonitor(BaseMonitor):
         "syscalls:sys_exit_openat",
     ]
 
+    # 配置模式定义
+    # min_count: 最小打开次数过滤，低于此值的文件路径统计将被忽略
+    # show_errors_only: 仅显示错误的打开操作，为True时过滤掉成功的open调用
+    CONFIG_SCHEMA = {
+        "min_count": {
+            "type": int,
+            "required": True,
+            "min": 0,
+            "default": 1,  # 默认显示所有出现过的文件打开操作
+        },
+        "show_errors_only": {
+            "type": bool,
+            "required": True,
+            "default": False  # 默认显示所有调用，包括成功的
+        }
+    }
+
     CSV_COLUMNS = [
         ("comm", "comm"),
         ("operation", "operation", operation_to_str),
@@ -134,38 +151,6 @@ class OpenMonitor(BaseMonitor):
         ],
         ["COMM", "OP", "FILENAME", "COUNT", "ERRORS", "AVG_LAT", "FLAGS"],
     )
-
-    @classmethod
-    def get_default_monitor_config(cls):
-        # type: () -> Dict[str, Any]
-        """获取open监控器默认配置"""
-        return {
-            "min_count": 1,
-            "show_errors_only": False
-        }
-
-    @classmethod
-    def validate_monitor_config(cls, config):
-        # type: (Dict[str, Any]) -> None
-        """验证open监控器配置"""
-        if config.get("min_count") is None:
-            raise ValueError("open监控配置中缺少必需字段: min_count")
-        if not isinstance(config.get("min_count"), int):
-            raise ValueError("min_count 必须为整数，当前类型: {}".format(type(config.get("min_count")).__name__))
-        if config.get("min_count") < 0:
-            raise ValueError("min_count 必须大于等于 0，当前值: {}".format(config.get("min_count")))
-
-        if config.get("show_errors_only") is None:
-            raise ValueError("open监控配置中缺少必需字段: show_errors_only")
-        if not isinstance(config.get("show_errors_only"), bool):
-            raise ValueError(
-                "show_errors_only 必须为布尔值，当前类型: {}".format(type(config.get("show_errors_only")).__name__))
-
-    def _initialize(self, config):
-        # type: (Dict[str, Any]) -> None
-        """初始化open监控器"""
-        self.min_count = config.get("min_count")  # type: int
-        self.show_errors_only = config.get("show_errors_only")  # type: bool
 
     def should_collect(self, key, value):
         # type: (Any, Any) -> bool

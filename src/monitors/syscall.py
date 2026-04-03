@@ -289,10 +289,8 @@ class SyscallCategory(Enum):
     def classify(cls, syscall_nr):
         # type: (int) -> SyscallCategory
         """对系统调用进行分类"""
-        # 遍历模块级别的分类映射
         for category_str, syscall_numbers in _SYSCALL_CATEGORIES_MAP.items():
             if syscall_nr in syscall_numbers:
-                # 根据字符串值返回对应的枚举成员
                 return getattr(cls, category_str.upper())
         return cls.UNKNOWN
 
@@ -303,6 +301,32 @@ class SyscallMonitor(BaseMonitor):
     REQUIRED_TRACEPOINTS = [  # type: List[str]
         "raw_syscalls:sys_exit"
     ]
+
+    # 配置模式定义
+    # monitor_categories: 控制要监控的系统调用分类，每个分类的布尔值决定是否收集该分类的数据
+    # show_errors_only: 仅显示错误的系统调用，为True时过滤掉成功的调用
+    CONFIG_SCHEMA = {
+        "monitor_categories": {
+            "type": dict,
+            "required": True,
+            "required_keys": ["file_io", "network", "memory", "process", "signal", "time", "ipc"],
+            "value_type": bool,
+            "default": {
+                "file_io": True,    # 文件IO类系统调用（read, write, open等）
+                "network": True,    # 网络类系统调用（socket, connect, sendto等）
+                "memory": True,     # 内存类系统调用（mmap, mprotect, munmap等）
+                "process": True,    # 进程类系统调用（fork, execve, clone等）
+                "signal": False,    # 信号类系统调用（kill, sigaction等），默认关闭
+                "time": False,      # 时间类系统调用（clock_gettime, nanosleep等），默认关闭
+                "ipc": True         # 进程间通信类系统调用（pipe, msgget, semget等）
+            }
+        },
+        "show_errors_only": {
+            "type": bool,
+            "required": True,
+            "default": False  # 默认显示所有调用，包括成功的
+        }
+    }
 
     CSV_COLUMNS = [
         ("comm", "comm"),
@@ -327,54 +351,6 @@ class SyscallMonitor(BaseMonitor):
         ],
         ["COMM", "SYSCALL", "CATEGORY", "COUNT", "ERRORS", "ERR_RATE"],
     )
-
-    @classmethod
-    def get_default_monitor_config(cls):
-        # type: () -> Dict[str, Any]
-        """获取系统调用监控器默认配置"""
-        return {
-            "monitor_categories": {
-                "file_io": True,
-                "network": True,
-                "memory": True,
-                "process": True,
-                "signal": False,
-                "time": False,
-                "ipc": True
-            },
-            "show_errors_only": False
-        }
-
-    @classmethod
-    def validate_monitor_config(cls, config):
-        # type: (Dict[str, Any]) -> None
-        """验证系统调用监控器配置"""
-        if config.get("monitor_categories") is None:
-            raise ValueError("系统调用监控配置中缺少必需字段: monitor_categories")
-        if not isinstance(config.get("monitor_categories"), dict):
-            raise ValueError(
-                "monitor_categories 必须为字典，当前类型: {}".format(type(config.get("monitor_categories")).__name__))
-
-        monitor_categories = config.get("monitor_categories")
-        required_categories = ["file_io", "network", "memory", "process", "signal", "time", "ipc"]
-        for category in required_categories:
-            if category not in monitor_categories:
-                raise ValueError("monitor_categories 必须包含字段: {}".format(category))
-            if not isinstance(monitor_categories[category], bool):
-                raise ValueError("monitor_categories.{} 必须为布尔值，当前类型: {}".format(
-                    category, type(monitor_categories[category]).__name__))
-
-        if config.get("show_errors_only") is None:
-            raise ValueError("系统调用监控配置中缺少必需字段: show_errors_only")
-        if not isinstance(config.get("show_errors_only"), bool):
-            raise ValueError(
-                "show_errors_only 必须为布尔值，当前类型: {}".format(type(config.get("show_errors_only")).__name__))
-
-    def _initialize(self, config):
-        # type: (Dict[str, Any]) -> None
-        """初始化系统调用监控器"""
-        self.monitor_categories = config.get("monitor_categories")  # type: Dict[str, bool]
-        self.show_errors_only = config.get("show_errors_only")  # type: bool
 
     def should_collect(self, key, value):
         """判断是否应该收集数据"""

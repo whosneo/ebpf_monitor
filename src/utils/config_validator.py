@@ -322,6 +322,19 @@ class ConfigValidator(object):
             allowed = field_schema.get("allowed")
             if allowed is not None and field_type == str:
                 ConfigValidator.validate_string(value, field_name, allowed_values=allowed)
+            
+            # 列表验证
+            if field_type == list:
+                min_len = field_schema.get("min_length")
+                max_len = field_schema.get("max_length")
+                item_type = field_schema.get("item_type")
+                ConfigValidator.validate_list(value, field_name, min_len, max_len, item_type)
+            
+            # 字典值类型验证
+            if field_type == dict:
+                value_type = field_schema.get("value_type")
+                if value_type is not None:
+                    ConfigValidator.validate_dict_values(value, field_name, value_type)
 
     @staticmethod
     def merge_with_defaults(config, defaults):
@@ -340,3 +353,21 @@ class ConfigValidator(object):
         if config:
             result.update(config)
         return result
+
+    @staticmethod
+    def extract_defaults_from_schema(schema):
+        # type: (Dict[str, Dict[str, Any]]) -> Dict[str, Any]
+        """
+        从模式中提取默认值
+        
+        Args:
+            schema: 配置模式
+            
+        Returns:
+            Dict[str, Any]: 默认值字典
+        """
+        defaults = {}
+        for field_name, field_schema in schema.items():
+            if "default" in field_schema:
+                defaults[field_name] = field_schema["default"]
+        return defaults
