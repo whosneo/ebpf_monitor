@@ -77,6 +77,9 @@ class BaseMonitor(ABC):
     # 需要验证的tracepoint，子类可以重写
     REQUIRED_TRACEPOINTS = []  # type: List[str]
 
+    # 声明式配置验证模式，子类可以重写
+    CONFIG_SCHEMA = {}  # type: Dict[str, Dict[str, Any]]
+
     MONITOR_THREAD_TIMEOUT = 5.0
 
     @classmethod
@@ -92,21 +95,10 @@ class BaseMonitor(ABC):
             "enabled": True,
             "interval": 2,
         }
-        base_config.update(cls.get_default_monitor_config())
+        if hasattr(cls, 'CONFIG_SCHEMA') and cls.CONFIG_SCHEMA:
+            monitor_defaults = ConfigValidator.extract_defaults_from_schema(cls.CONFIG_SCHEMA)
+            base_config.update(monitor_defaults)
         return base_config
-
-    @classmethod
-    def get_default_monitor_config(cls):
-        # type: () -> Dict[str, Any]
-        """
-        获取监控器特定的默认配置
-
-        子类可以重写此方法来提供特定的默认配置
-
-        Returns:
-            Dict[str, Any]: 默认配置字典
-        """
-        return {}
 
     @classmethod
     def validate_config(cls, config):
@@ -136,20 +128,8 @@ class BaseMonitor(ABC):
         ConfigValidator.validate_required(config, ["interval"])
         ConfigValidator.validate_float(config.get("interval"), "interval", min_val=0.001)
 
-        cls.validate_monitor_config(config)
-
-    @classmethod
-    def validate_monitor_config(cls, config):
-        # type: (Dict[str, Any]) -> None
-        """
-        验证监控器特定配置
-
-        子类需要重写此方法来提供特定的配置验证
-
-        Args:
-            config: 配置字典
-        """
-        pass
+        if hasattr(cls, 'CONFIG_SCHEMA') and cls.CONFIG_SCHEMA:
+            ConfigValidator.validate_schema(config, cls.CONFIG_SCHEMA)
 
     @classmethod
     def get_monitor_type(cls):
@@ -205,7 +185,13 @@ class BaseMonitor(ABC):
 
         self.interval = config.get("interval")  # type: float
 
-        # 应用配置
+        # 自动从 CONFIG_SCHEMA 提取配置字段并赋值
+        if hasattr(self.__class__, 'CONFIG_SCHEMA') and self.__class__.CONFIG_SCHEMA:
+            for field_name in self.__class__.CONFIG_SCHEMA:
+                if field_name in config:
+                    setattr(self, field_name, config[field_name])
+
+        # 应用配置（子类可以重写以进行额外初始化）
         self._initialize(config)
 
         self.logger.debug("[BaseMonitor] {}监控器初始化完成".format(self.__class__.__name__))

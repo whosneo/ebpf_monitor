@@ -100,6 +100,17 @@ class BioMonitor(BaseMonitor):
         'block:block_rq_complete'
     ]
 
+    # 配置模式定义
+    # min_latency_us: 最小延迟过滤阈值（微秒），低于此值的IO操作将被过滤
+    CONFIG_SCHEMA = {
+        "min_latency_us": {
+            "type": (int, float),
+            "required": True,
+            "min": 0,
+            "default": 0,  # 默认不过滤，记录所有IO操作
+        }
+    }
+
     CSV_COLUMNS = [
         ("comm", "comm"),
         ("io_type", "bio_type"),
@@ -127,31 +138,6 @@ class BioMonitor(BaseMonitor):
         ],
         ["COMM", "IO_TYPE", "COUNT", "SIZE", "AVG_LAT", "MIN_LAT", "MAX_LAT", "THROUGHPUT"],
     )
-
-    @classmethod
-    def get_default_monitor_config(cls):
-        # type: () -> Dict[str, Any]
-        """获取BIO监控器默认配置"""
-        return {
-            "min_latency_us": 0  # 最小延迟过滤（微秒，0表示不过滤）
-        }
-
-    @classmethod
-    def validate_monitor_config(cls, config):
-        # type: (Dict[str, Any]) -> None
-        """验证BIO监控器配置"""
-        if config.get("min_latency_us") is None:
-            raise ValueError("BIO监控配置中缺少必需字段: min_latency_us")
-        if not isinstance(config.get("min_latency_us"), (int, float)):
-            raise ValueError(
-                "min_latency_us 必须为数字，当前类型: {}".format(type(config.get("min_latency_us")).__name__))
-        if config.get("min_latency_us") < 0:
-            raise ValueError("min_latency_us 必须大于等于 0，当前值: {}".format(config.get("min_latency_us")))
-
-    def _initialize(self, config):
-        # type: (Dict[str, Any]) -> None
-        """初始化BIO监控器"""
-        self.min_latency_us = config.get("min_latency_us")  # type: float
 
     def should_collect(self, key, value):
         # type: (Any, Any) -> bool

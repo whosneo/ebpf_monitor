@@ -28,41 +28,25 @@ from ..utils.decorators import register_monitor
 class FuncMonitor(BaseMonitor):
     """内核函数监控器"""
 
-    @classmethod
-    def get_default_monitor_config(cls):
-        # type: () -> Dict[str, Any]
-        """获取func监控器默认配置"""
-        return {
-            "patterns": ["vfs_*"],  # 匹配模式
-            "probe_limit": 10  # 最大探针数量
+    # 配置模式定义
+    # patterns: 内核函数名匹配模式列表，支持通配符*和?
+    # probe_limit: 最大探针数量限制，防止匹配过多函数影响系统性能
+    CONFIG_SCHEMA = {
+        "patterns": {
+            "type": list,
+            "required": True,
+            "min_length": 1,
+            "item_type": str,
+            "default": ["vfs_*"],  # 默认匹配VFS层函数（虚拟文件系统）
+        },
+        "probe_limit": {
+            "type": int,
+            "required": True,
+            "min": 1,
+            "max": 100,
+            "default": 10,  # 默认最多附加10个探针
         }
-
-    @classmethod
-    def validate_monitor_config(cls, config):
-        # type: (Dict[str, Any]) -> None
-        """
-        验证func监控器配置
-        
-        Args:
-            config: 监控器配置字典
-            
-        Raises:
-            ValueError: 配置验证失败时抛出
-        """
-        if config.get("patterns") is None:
-            raise ValueError("func监控配置中缺少必需字段: patterns")
-        if not isinstance(config.get("patterns"), list):
-            raise ValueError("patterns 必须为列表，当前类型: {}".format(type(config.get("patterns")).__name__))
-        if len(config.get("patterns")) == 0:
-            raise ValueError("patterns 列表不能为空")
-        if config.get("probe_limit") is None:
-            raise ValueError("func监控配置中缺少必需字段: probe_limit")
-        if not isinstance(config.get("probe_limit"), int):
-            raise ValueError("probe_limit 必须为整数，当前类型: {}".format(type(config.get("probe_limit")).__name__))
-        if config.get("probe_limit") < 1:
-            raise ValueError("probe_limit 必须大于等于 1，当前值: {}".format(config.get("probe_limit")))
-        if config.get("probe_limit") > 100:
-            raise ValueError("probe_limit 必须小于等于 100，当前值: {}".format(config.get("probe_limit")))
+    }
 
     def _validate_requirements(self):
         """验证内核函数监控要求"""
@@ -72,11 +56,7 @@ class FuncMonitor(BaseMonitor):
     def _initialize(self, config):
         # type: (Dict[str, Any]) -> None
         """初始化内核函数监控器"""
-        # 应用配置
-        self.patterns = config.get("patterns")  # type: List[str]
-        self.probe_limit = config.get("probe_limit")  # type: int
-
-        # 查找匹配的函数
+        # 查找匹配的函数（配置字段已由基类自动赋值）
         self.matched_functions = self._find_matching_functions()  # type: Dict[int, str]
 
     def _find_matching_functions(self):

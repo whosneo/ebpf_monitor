@@ -77,6 +77,17 @@ class ContextSwitchMonitor(BaseMonitor):
     """
     REQUIRED_TRACEPOINTS = ['sched:sched_switch']  # type: List[str]
 
+    # 配置模式定义
+    # min_switches: 最小切换次数过滤，低于此值的进程上下文切换统计将被忽略
+    CONFIG_SCHEMA = {
+        "min_switches": {
+            "type": int,
+            "required": True,
+            "min": 0,
+            "default": 10,  # 默认只显示切换次数>=10的进程
+        }
+    }
+
     CSV_COLUMNS = [
         ("comm", "comm"),
         ("cpu", "cpu"),
@@ -101,30 +112,6 @@ class ContextSwitchMonitor(BaseMonitor):
         ],
         ["COMM", "CPU", "IN", "OUT", "TOTAL", "VOL", "INVOL", "VOL_RATE"],
     )
-
-    @classmethod
-    def get_default_monitor_config(cls):
-        # type: () -> Dict[str, Any]
-        """获取默认配置"""
-        return {
-            "min_switches": 10  # 最小切换次数过滤
-        }
-
-    @classmethod
-    def validate_monitor_config(cls, config):
-        # type: (Dict[str, Any]) -> None
-        """验证监控器配置"""
-        if config.get("min_switches") is None:
-            raise ValueError("min_switches 必须为整数，当前类型: {}".format(type(config.get("min_switches")).__name__))
-        if not isinstance(config.get("min_switches"), int):
-            raise ValueError("min_switches 必须为整数，当前类型: {}".format(type(config.get("min_switches")).__name__))
-        if config.get("min_switches") < 0:
-            raise ValueError("min_switches 必须大于等于 0，当前值: {}".format(config.get("min_switches")))
-
-    def _initialize(self, config):
-        # type: (Dict[str, Any]) -> None
-        """初始化监控器特定的属性"""
-        self.min_switches = config.get("min_switches")
 
     def should_collect(self, key, value):
         # type: (ContextSwitchKey, ContextSwitchValue) -> bool
