@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-2.7%2B-blue)](https://www.python.org/)
 [![Python Version](https://img.shields.io/badge/python-3.7%2B-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux-orange)](https://www.kernel.org/)
-[![eBPF](https://img.shields.io/badge/kernel-4.18%2B-orange)](https://www.kernel.org/)
+[![Kernel](https://img.shields.io/badge/kernel-3.10%2B-orange)](https://www.kernel.org/)
 
 基于 eBPF 技术的现代化系统监控解决方案，提供低开销、高精度的实时系统监控能力。采用依赖注入架构设计，支持 8 种监控器（进程执行、文件打开、块I/O、系统调用、内核函数、中断、页面错误、上下文切换）和灵活的输出控制。
 
