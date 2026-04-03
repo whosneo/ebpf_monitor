@@ -1,29 +1,36 @@
 # eBPF 系统监控工具
 
-基于 eBPF 技术的现代化系统监控解决方案，提供低开销、高精度的实时系统监控能力。采用依赖注入架构设计，支持多种监控器和灵活的输出控制。
+[![Python Version](https://img.shields.io/badge/python-2.7%2B-blue)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.7%2B-blue)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Linux-orange)](https://www.kernel.org/)
+[![eBPF](https://img.shields.io/badge/kernel-4.18%2B-orange)](https://www.kernel.org/)
+
+基于 eBPF 技术的现代化系统监控解决方案，提供低开销、高精度的实时系统监控能力。采用依赖注入架构设计，支持 8 种监控器（进程执行、文件打开、块I/O、系统调用、内核函数、中断、页面错误、上下文切换）和灵活的输出控制。
 
 ## 🎯 项目概述
 
-本工具通过 eBPF 技术深入内核空间，实现对 Linux 系统的实时监控。采用 Python 用户空间程序结合 C 语言 eBPF 内核程序，提供高效的数据收集和处理能力。
+本工具通过 eBPF 技术深入 Linux 内核空间，实现对系统的高效实时监控。采用 Python 用户空间程序结合 C 语言 eBPF 内核程序，提供高效的数据收集和处理能力。
 
 ### 核心优势
-- **低开销监控**：基于 eBPF 技术，对系统性能影响极小
-- **实时数据**：支持实时事件收集和数据输出
+- **低开销监控**：基于 eBPF 技术，对系统性能影响极小（<1% CPU）
+- **实时数据**：支持实时事件收集和数据输出（毫秒级延迟）
 - **模块化设计**：监控器自动注册机制，易于扩展
 - **配置驱动**：通过 YAML 配置文件灵活控制行为
 - **多输出格式**：支持控制台显示和 CSV 文件存储
 - **生产就绪**：采用依赖注入和分层锁机制，确保稳定性
+- **数据分析**：内置强大的数据分析工具，支持多维度统计
+- **双模式输出**：单条记录模式（exec）和聚合统计模式（其他监控器），数据量减少 90%+
 
 ## 🛠 系统要求
 
 **运行环境**
-- Linux 内核版本 >= 4.1（推荐 4.18+）
-- Python 2.7+ 或 Python 3.7+（完全兼容Python 2.7）
-- root 权限
+- Linux 内核版本 >= 3.10（推荐 4.18+）
+- Python 2.7+ 或 Python 3.7+（完全兼容 Python 2.7）
+- root 权限或 CAP_BPF 能力
 
 **硬件要求**
-- CPU：2 核心以上
-- 内存：2GB 以上
+- CPU：2 核心以上（推荐 4 核心）
+- 内存：2GB 以上（推荐 4GB）
 - 存储：1GB 可用空间
 
 **依赖包**
@@ -33,6 +40,14 @@
 - `python3-yaml`：YAML 配置解析
 - `python3-psutil`：系统信息获取
 
+**Python 依赖**
+```
+pandas>=1.0.0
+PyYAML>=3.13
+bcc>=0.18.0
+psutil>=5.4.0
+```
+
 ## 🚀 快速开始
 
 ### 1. 环境检查与安装
@@ -41,7 +56,8 @@
 ```bash
 # 安装依赖
 sudo yum install python3-bpfcc bpfcc-tools kernel-devel-$(uname -r)
-sudo yum install python3-yaml python3-psutil
+sudo yum install python3-pip python3-yaml python3-psutil
+pip3 install -r requirements.txt
 ```
 
 **Ubuntu/Debian 系列：**
@@ -49,7 +65,8 @@ sudo yum install python3-yaml python3-psutil
 # 安装依赖
 sudo apt update
 sudo apt install python3-bpfcc bpfcc-tools linux-headers-$(uname -r)
-sudo apt install python3-yaml python3-psutil
+sudo apt install python3-pip python3-yaml python3-psutil
+pip3 install -r requirements.txt
 ```
 
 ### 2. 基本使用
@@ -60,17 +77,21 @@ cd ebpf
 
 # 默认启动（所有已启用的监控器）
 sudo python3 main.py
-# 或使用Python 2.7
-sudo python main.py
 
 # 启动特定监控器
-sudo python3 main.py -m exec,func,syscall,bio,open,interrupt,page_fault,context_switch
+sudo python3 main.py -m exec
+
+# 启动多个监控器
+sudo python3 main.py -m exec,func,syscall,bio
 
 # 详细输出模式
 sudo python3 main.py --verbose
 
 # 查看版本信息
 python3 main.py -V
+
+# 查看帮助
+python3 main.py --help
 ```
 
 ### 3. 守护进程模式
@@ -86,14 +107,30 @@ sudo python3 main.py --daemon-status
 sudo python3 main.py --daemon-stop
 ```
 
+### 4. 数据分析
+
+```bash
+# 进入分析目录
+cd analysis
+
+# 分析指定日期的数据
+python3 analyzer.py --date 20251121
+
+# 分析特定类型的监控数据
+python3 analyzer.py --date 20251121 --type bio
+```
+
 ## 📁 项目结构
 
 ```
 ebpf/
-├── main.py                         # 程序主入口
-├── src/                            # 源代码目录
+├── main.py                        # 程序主入口
+├── requirements.txt               # Python 依赖
+├── README.md                      # 项目说明文档
+├── package.sh                     # 打包脚本
+├── src/                           # 源代码目录
 │   ├── ebpf_monitor.py            # 主监控器类
-│   ├── monitors/                   # 监控器模块
+│   ├── monitors/                  # 监控器模块
 │   │   ├── base.py                # 监控器基类
 │   │   ├── exec.py                # 进程执行监控
 │   │   ├── func.py                # 内核函数监控
@@ -115,13 +152,18 @@ ebpf/
 │   └── utils/                     # 工具模块
 │       ├── application_context.py # 应用上下文（依赖注入）
 │       ├── config_manager.py      # 配置管理器
+│       ├── config_validator.py    # 配置验证器
 │       ├── configs.py             # 配置数据类
+│       ├── monitors_config.py     # 监控器配置
 │       ├── log_manager.py         # 日志管理器
 │       ├── monitor_registry.py    # 监控器注册表
 │       ├── monitor_factory.py     # 监控器工厂
 │       ├── monitor_context.py     # 监控器上下文
+│       ├── monitor_data_utils.py  # 监控数据工具
 │       ├── capability_checker.py  # 系统兼容性检查
 │       ├── output_controller.py   # 输出控制器
+│       ├── console_writer.py      # 控制台输出
+│       ├── csv_writer.py          # CSV 输出
 │       ├── data_processor.py      # 数据处理工具
 │       ├── daemon_manager.py      # 守护进程管理
 │       ├── decorators.py          # 装饰器定义
@@ -135,7 +177,11 @@ ebpf/
 │   ├── analyzer.py                # 主分析程序
 │   ├── data_utils.py              # 数据处理工具
 │   ├── preprocess_data.sh         # 数据预处理脚本
-│   └── README.md                  # 分析工具文档
+│   ├── requirements.txt           # 分析工具依赖
+│   ├── README.md                  # 分析工具文档
+│   ├── USAGE.md                   # 使用说明
+│   ├── daily_data/                # 预处理后的每日数据
+│   └── reports/                   # 生成的分析报告
 ├── logs/                          # 日志文件目录
 ├── output/                        # 监控数据输出目录
 └── temp/                          # 临时文件目录
@@ -164,10 +210,11 @@ ebpf/
 │                   管理层 (Management)                    │
 │  ConfigManager | LogManager | MonitorRegistry           │
 │  OutputController | CapabilityChecker | DaemonManager   │
+│  MonitorFactory | MonitorContext                        │
 └─────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────┐
 │                   监控层 (Monitor)                       │
-│    BaseMonitor → ExecMonitor (可扩展其他监控器)            │
+│    BaseMonitor → ExecMonitor, BioMonitor, ...           │
 └─────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────┐
 │                   内核层 (Kernel)                        │
@@ -208,33 +255,39 @@ ebpf/
 
 ### 数据输出模式
 
-系统采用**聚合统计模式**输出监控数据，具有以下特点：
+系统采用**两种输出模式**，根据监控器类型自动选择：
 
-- **高效聚合**：按配置的时间间隔（默认2秒）聚合统计数据
-- **数据量小**：相比单条记录模式，数据量减少90%以上
-- **统计丰富**：包含count、error_rate、avg_latency等统计指标
+| 模式 | 监控器 | 特点 |
+|------|--------|------|
+| **单条记录模式** | exec | 每个事件生成一条记录，实时输出 |
+| **聚合统计模式** | bio, open, syscall, func, interrupt, page_fault, context_switch | 按时间间隔聚合统计数据，数据量减少 90%+ |
+
+**聚合统计优势**：
+- **高效聚合**：按配置的时间间隔（默认 2 秒）聚合统计数据
+- **数据量小**：相比单条记录模式，数据量减少 90% 以上
+- **统计丰富**：包含 count、error_rate、avg_latency 等统计指标
 - **便于分析**：预聚合的数据可直接用于性能分析
 
 ### 当前支持的监控器
 
-| 监控器 | 功能描述 | eBPF机制 | 输出字段 |
-|-------|---------|---------|----------|
-| **exec** | 进程执行监控 | kprobe | 时间戳、进程名、UID、PID、可执行文件路径 |
-| **open** | 文件打开监控 | tracepoint | 进程信息、文件路径、打开标志、操作类型、操作延迟 |
-| **bio** | 块 I/O 操作监控 | tracepoint | 进程信息、I/O类型、操作延迟、吞吐量 |
-| **syscall** | 系统调用监控 | tracepoint | 进程信息、系统调用号、分类、数量、错误状态 |
-| **func** | 内核函数监控 | kprobe | 进程信息、函数名、数量 |
-| **interrupt** | 中断监控 | tracepoint | 中断名称、类型、CPU、数量 |
-| **page_fault** | 页面错误监控 | tracepoint | 进程信息、错误类型、CPU、NUMA、数量 |
-| **context_switch** | 上下文切换监控 | tracepoint | 进程信息、CPU、切换次数、状态 |
+| 监控器 | 功能描述 | eBPF机制 | 输出模式 | 配置选项 |
+|-------|---------|---------|---------|----------|
+| **exec** | 进程执行监控 | kprobe | 单条记录 | enabled |
+| **open** | 文件打开监控 | tracepoint | 聚合统计 | enabled, interval, min_count, show_errors_only |
+| **bio** | 块 I/O 操作监控 | tracepoint | 聚合统计 | enabled, interval, min_latency_us |
+| **syscall** | 系统调用监控 | tracepoint | 聚合统计 | enabled, interval, monitor_categories, show_errors_only |
+| **func** | 内核函数监控 | kprobe | 聚合统计 | enabled, interval, patterns, probe_limit |
+| **interrupt** | 中断监控 | tracepoint | 聚合统计 | enabled, interval |
+| **page_fault** | 页面错误监控 | tracepoint | 聚合统计 | enabled, interval |
+| **context_switch** | 上下文切换监控 | tracepoint | 聚合统计 | enabled, interval, min_switches |
 
 ### 监控器详细说明
 
 **ExecMonitor（进程执行监控）**
 - **机制**：使用 kprobe 动态探针，附加到 `__x64_sys_execve`/`sys_execve` 等内核符号
-- **特点**：兼容老内核（如RHEL 7/内核3.10），捕获进程执行信息，单条记录模式
+- **特点**：兼容老内核（如 RHEL 7/内核 3.10），捕获进程执行信息，单条记录模式
 - **应用场景**：进程启动监控、安全审计、性能分析
-- **兼容性**：支持多种内核版本，自动尝试不同的execve符号名称
+- **兼容性**：支持多种内核版本，自动尝试不同的 execve 符号名称
 
 **FuncMonitor（内核函数监控）**
 - **机制**：使用 kprobe 动态探针技术
@@ -248,7 +301,7 @@ ebpf/
     patterns: ["vfs_read", "sys_*"]  # 函数名列表
     probe_limit: 10                      # 最大探针数量
   ```
-- **注意**：patterns支持通配符（如 `vfs_*`），会从 `/proc/kallsyms` 中查找匹配的函数
+- **注意**：patterns 支持通配符（如 `vfs_*`），会从 `/proc/kallsyms` 中查找匹配的函数
 
 **SyscallMonitor（系统调用监控）**
 - **机制**：使用 `raw_syscalls:sys_enter` 和 `raw_syscalls:sys_exit` tracepoint
@@ -270,8 +323,8 @@ ebpf/
 
 **BIOMonitor（块I/O操作监控）**
 - **机制**：使用 `block:block_rq_issue` 和 `block:block_rq_complete` tracepoint
-- **特点**：监控块设备层IO，测量延迟和吞吐量，聚合统计模式，过滤Page Cache命中
-- **应用场景**：存储性能分析、I/O瓶颈定位、磁盘性能评估
+- **特点**：监控块设备层 IO，测量延迟和吞吐量，聚合统计模式，过滤 Page Cache 命中
+- **应用场景**：存储性能分析、I/O 瓶颈定位、磁盘性能评估
 - **配置示例**：
   ```yaml
   bio:
@@ -295,8 +348,8 @@ ebpf/
 
 **InterruptMonitor（中断监控）**
 - **机制**：使用 `irq:irq_handler_entry` 和 `irq:softirq_entry` tracepoint
-- **特点**：区分硬件/软件中断，聚合统计模式，支持CPU亲和性分析
-- **应用场景**：系统性能调优、中断负载均衡、CPU热点分析
+- **特点**：区分硬件/软件中断，聚合统计模式，支持 CPU 亲和性分析
+- **应用场景**：系统性能调优、中断负载均衡、CPU 热点分析
 - **配置示例**：
   ```yaml
   interrupt:
@@ -306,7 +359,7 @@ ebpf/
 
 **PageFaultMonitor（页面错误监控）**
 - **机制**：使用 `exceptions:page_fault_user` tracepoint
-- **特点**：监控用户空间页面错误，区分主要/次要错误，聚合统计模式，支持NUMA节点分析
+- **特点**：监控用户空间页面错误，区分主要/次要错误，聚合统计模式，支持 NUMA 节点分析
 - **应用场景**：内存性能分析、内存压力监控、应用优化
 - **配置示例**：
   ```yaml
@@ -317,8 +370,8 @@ ebpf/
 
 **ContextSwitchMonitor（上下文切换监控）**
 - **机制**：使用 `sched:sched_switch` tracepoint
-- **特点**：监控进程/线程上下文切换，分析CPU调度性能，支持统计聚合
-- **应用场景**：CPU调度分析、性能优化、延迟诊断、负载均衡分析
+- **特点**：监控进程/线程上下文切换，分析 CPU 调度性能，支持统计聚合
+- **应用场景**：CPU 调度分析、性能优化、延迟诊断、负载均衡分析
 - **配置示例**：
   ```yaml
   context_switch:
@@ -361,20 +414,13 @@ logging:
 
 # 输出控制器配置
 output:
-  buffer_size: 2000        # 事件缓冲区大小
-  flush_interval: 2.0      # 刷新间隔（秒）
-  csv_delimiter: ","       # CSV分隔符
-  include_header: true     # 是否包含表头
-
-# 性能调优配置
-performance:
-  output_batch_size: 1000           # 输出批处理大小
-  large_batch_threshold: 20         # 大批次阈值（触发立即刷盘）
-  monitor_thread_timeout: 5.0       # 监控线程join超时时间（秒）
-  daemon_stop_timeout: 10           # 守护进程停止超时时间（秒）
-  stats_timer_timeout: 2.0          # 统计定时器join超时时间（秒）
-  output_thread_sleep: 0.1          # 输出线程休眠时间（秒）
-  bpf_poll_timeout: 1000            # BPF轮询超时时间（毫秒）
+  buffer_size: 5000            # 事件缓冲区大小
+  batch_size: 1000             # 批处理大小
+  large_batch_threshold: 500   # 大批次阈值
+  flush_interval: 2.0          # 刷新间隔（秒）
+  output_thread_sleep: 0.1     # 输出线程休眠时间（秒）
+  csv_delimiter: ","           # CSV分隔符
+  include_header: true         # 是否包含表头
 
 # 监控器配置
 monitors:
@@ -436,14 +482,14 @@ monitors:
 
 本项目完全兼容 Python 2.7，采用以下兼容性策略：
 
-- **类型注解**：使用注释形式的类型提示（`# type: ...`），不影响Python 2.7运行
-- **pathlib**：提供Python 2.7兼容的Path实现（`src/utils/py2_compat.py`）
-- **字符串格式化**：统一使用`.format()`方法而非f-string
-- **异常处理**：兼容Python 2.7的异常类型（如使用`IOError`而非`FileNotFoundError`）
-- **字典操作**：使用`.items()`而非`.iteritems()`
-- **导入处理**：所有Python 3特性都有Python 2.7降级方案
+- **类型注解**：使用注释形式的类型提示（`# type: ...`），不影响 Python 2.7 运行
+- **pathlib**：提供 Python 2.7 兼容的 Path 实现（`src/utils/py2_compat.py`）
+- **字符串格式化**：统一使用 `.format()` 方法而非 f-string
+- **异常处理**：兼容 Python 2.7 的异常类型（如使用 `IOError` 而非 `FileNotFoundError`）
+- **字典操作**：使用 `.items()` 而非 `.iteritems()`
+- **导入处理**：所有 Python 3 特性都有 Python 2.7 降级方案
 
-**推荐使用Python 3.7+以获得更好的性能和类型检查支持，但Python 2.7环境下也能正常运行。**
+**推荐使用 Python 3.7+ 以获得更好的性能和类型检查支持，但 Python 2.7 环境下也能正常运行。**
 
 ## 📄 输出数据格式
 
@@ -465,11 +511,11 @@ output/
 
 ### 聚合统计格式
 
-大部分监控器采用聚合统计格式输出，按配置的时间间隔（默认2秒）汇总数据：
+大部分监控器采用聚合统计格式输出，按配置的时间间隔（默认 2 秒）汇总数据：
 
 **优势**：
-- 数据量减少90%以上
-- 包含丰富的统计指标（count、error_rate、avg_latency等）
+- 数据量减少 90% 以上
+- 包含丰富的统计指标（count、error_rate、avg_latency 等）
 - 便于直接进行性能分析
 - 减少存储空间需求
 
@@ -540,7 +586,7 @@ TIME                   UID    PID      COMM             FILENAME
 [2025-11-21 14:30:01]  1000   5678     python3          /usr/bin/python3
 ```
 
-**聚合统计监控器控制台输出**（以FuncMonitor为例）：
+**聚合统计监控器控制台输出**（以 FuncMonitor 为例）：
 ```
 TIME                   COMM             FUNC_NAME        COUNT
 [2025-11-21 14:30:00]  nginx            vfs_read         1250
@@ -621,6 +667,27 @@ sudo yum install python3-bpfcc bpfcc-tools
 
 # Ubuntu/Debian
 sudo apt install python3-bpfcc bpfcc-tools
+
+# 安装 Python 依赖
+pip3 install -r requirements.txt
+```
+
+**4. 内核头文件缺失**
+```bash
+# CentOS/RHEL
+sudo yum install kernel-devel-$(uname -r)
+
+# Ubuntu/Debian
+sudo apt install linux-headers-$(uname -r)
+```
+
+**5. 监控器加载失败**
+```bash
+# 查看详细错误日志
+tail -f logs/monitor.log
+
+# 检查可用监控器
+python3 main.py --help
 ```
 
 ### 调试方法
@@ -637,6 +704,20 @@ tail -f logs/monitor.log
 
 # 查看错误
 grep ERROR logs/monitor.log
+
+# 查看特定组件日志
+grep "eBPFMonitor" logs/monitor.log
+```
+
+**检查系统状态**
+```bash
+# 检查进程状态
+ps aux | grep python3
+
+# 检查系统资源
+top
+free -h
+df -h
 ```
 
 ## ⚡ 性能优化
@@ -658,13 +739,13 @@ sudo python3 main.py -m exec
 
 ## 📊 数据分析
 
-项目提供了强大的数据分析工具，用于分析eBPF监控系统采集的性能数据。
+项目提供了强大的数据分析工具，用于分析 eBPF 监控系统采集的性能数据。
 
 ### 分析工具特性
 
 - **支持所有监控器类型**：exec, bio, func, open, syscall, interrupt, page_fault
 - **聚合统计分析**：针对聚合统计格式优化，分析速度快
-- **多维度统计**：提供Top排名、百分比、交叉分析等
+- **多维度统计**：提供 Top 排名、百分比、交叉分析等
 - **数据预处理**：自动分割大文件，按日期组织数据
 - **可视化报告**：生成格式化的文本分析报告
 
@@ -703,9 +784,9 @@ BIO (块I/O) 监控数据分析 - 20251121
   ...
 
 按进程统计 (Top 15):
-   1. mysqld                  5,678次 (46.00%) |   567.89 MB
-   2. nginx                   3,456次 (28.00%) |   345.67 MB
-   ...
+    1. mysqld                  5,678次 (46.00%) |   567.89 MB
+    2. nginx                   3,456次 (28.00%) |   345.67 MB
+    ...
 ```
 
 详细使用说明请参考 [分析工具文档](analysis/README.md)。
