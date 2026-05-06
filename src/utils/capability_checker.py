@@ -329,10 +329,19 @@ class CapabilityChecker:
         flags = []
         major, minor = self.kernel_version[0], self.kernel_version[1]
 
+        # 内核3.x兼容标志（RHEL 7.9, 3.10）
+        if major < 4:
+            flags.append("-DKERNEL_VERSION_3_X")
+
         # 系统调用包装器支持（Linux 4.17+）
         # 4.17+ 内核使用 __x64_sys_* 等包装器，参数传递方式不同
         if (major, minor) >= (4, 17):
             flags.append("-DKERNEL_VERSION_4_17_PLUS")
+
+        # 增强特性支持（Linux 4.19+）
+        # 4.19+ 内核支持扩展的BPF特性，如 BPF_LSM、循环等
+        if (major, minor) >= (4, 19):
+            flags.append("-DKERNEL_VERSION_4_19_PLUS")
 
         self.logger.debug("eBPF编译标志: {}".format(flags))
         return flags
