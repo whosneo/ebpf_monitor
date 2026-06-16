@@ -229,7 +229,7 @@ class BaseMonitor(ABC):
         # type: (Dict[str, Any]) -> None
         """
         初始化监控器
-
+        
         子类可以重写此方法来初始化监控器特定的属性
         """
         pass
@@ -238,9 +238,9 @@ class BaseMonitor(ABC):
         # type: () -> bool
         """
         加载eBPF程序
-
+        
         标准化的eBPF程序加载流程
-
+        
         Returns:
             bool: 加载是否成功
         """
@@ -267,7 +267,7 @@ class BaseMonitor(ABC):
         # type: () -> str
         """
         获取eBPF程序代码
-
+        
         子类可以重写此方法来修改代码（如动态生成探针）
         """
         with open(str(self.ebpf_file), "r") as f:
@@ -277,7 +277,7 @@ class BaseMonitor(ABC):
     def _configure_ebpf_program(self):
         """
         配置eBPF程序特定参数
-
+        
         子类可以重写此方法来进行特定的eBPF程序配置
         """
         pass
@@ -287,11 +287,11 @@ class BaseMonitor(ABC):
         # type: () -> bool
         """
         开始监控
-
+        
         根据监控器模式启动相应的监控流程：
         - STATISTICAL: 启动统计定时器线程
         - EVENT: 启动事件轮询线程
-
+        
         Returns:
             bool: 启动是否成功
         """
@@ -421,9 +421,9 @@ class BaseMonitor(ABC):
     def should_collect(self, key, value):
         """
         判断是否应该收集数据
-
+        
         子类可以重写此方法来提供特定的数据过滤逻辑
-
+        
         Args:
             key: 键
             value: 值
@@ -459,7 +459,7 @@ class BaseMonitor(ABC):
         # type: () -> bool
         """
         检查是否正在监控
-
+        
         Returns:
             bool: 监控状态
         """
@@ -494,7 +494,7 @@ class BaseMonitor(ABC):
     #   ("col", ("k1","k2"), fn)              — 多键 fn(data[k1], data[k2])
     # 转换函数可以是：
     #   - 无状态纯函数（模块级定义）
-    #   - 实例方法（self.xxx），通过子类中定义方法后在CSV_COLUMNS中引用
+    #   - 类中定义的方法引用（如 self.xxx），通过子类中定义方法后在CSV_COLUMNS中引用
     #     例: class MyMonitor:
     #           def _fmt_xxx(self, v): return self.lookup[v]
     #           CSV_COLUMNS = [("xxx", "key", _fmt_xxx)]
@@ -512,6 +512,20 @@ class BaseMonitor(ABC):
     # 第3个元素是列标题列表，与第2个元素一一对应。
     # 转换函数同CSV_COLUMNS，支持实例方法
     CONSOLE_FORMAT = None  # type: tuple
+
+    # 声明式Prometheus指标定义
+    # 格式: {
+    #     "labels": [("label_name", "data_key"), ...],  # 标签映射
+    #     "metrics": [
+    #         ("metric_name", "gauge"|"counter", "help_text", value_source, transform_fn),
+    #         ...
+    #     ]
+    # }
+    # value_source 支持:
+    #   "key"                        — 简单取值 data["key"]
+    #   ("k1", "k2")                 — 多键传递给 transform_fn
+    # transform_fn 可以是 None（直接使用原始值）或 callable
+    PROMETHEUS_CONFIG = None  # type: dict
 
     @staticmethod
     def _is_class_defined_method(fn, cls):
@@ -549,7 +563,7 @@ class BaseMonitor(ABC):
         # type: (Any, Dict[str, Any]) -> Any
         """
         根据列定义从data中提取值。
-
+        
         统一处理CSV_COLUMNS和CONSOLE_FORMAT的列定义，支持以下格式:
           "key"                         -> data.get("key", "")
           ("key", fn)                   -> fn(data.get("key", ""))
@@ -577,7 +591,7 @@ class BaseMonitor(ABC):
         # type: (str) -> str
         """
         将格式字符串中的数字类型符降级为字符串格式。
-
+        
         用于表头生成，避免字符串类型的表头文字触发数字格式化错误。
         如 {:<7.1f}% → {:<7}% 、 {:>8.1f} → {:>8}
         """
@@ -593,7 +607,7 @@ class BaseMonitor(ABC):
         # type: () -> List[str]
         """
         获取CSV头部字段列表。
-
+        
         Returns:
             List[str]: CSV头部字段列表（含 timestamp 和 time_str）
         """
@@ -603,10 +617,10 @@ class BaseMonitor(ABC):
         # type: () -> List[str]
         """
         获取监控器CSV头部字段。
-
+        
         如果子类声明了 CSV_COLUMNS，自动从中提取列名。
         否则子类需重写此方法。
-
+        
         Returns:
             List[str]: 监控器CSV头部字段列表
         """
@@ -618,7 +632,7 @@ class BaseMonitor(ABC):
         # type: (Dict[str, Any]) -> Dict[str, Any]
         """
         将事件数据格式化为CSV行数据。
-
+        
         Args:
             data: 原始事件数据
 
@@ -635,10 +649,10 @@ class BaseMonitor(ABC):
         # type: (Dict[str, Any]) -> Dict[str, Any]
         """
         将事件数据格式化为CSV行数据。
-
+        
         如果子类声明了 CSV_COLUMNS，自动从中提取数据。
         否则子类需重写此方法。
-
+        
         Args:
             data: 原始事件数据
 
@@ -655,9 +669,9 @@ class BaseMonitor(ABC):
         # type: () -> str
         """
         获取控制台输出的表头。
-
+        
         基类自动拼接 TIME 前缀与监控器表头。
-
+        
         Returns:
             str: 格式化后的控制台表头字符串
         """
@@ -667,12 +681,12 @@ class BaseMonitor(ABC):
         # type: () -> str
         """
         获取监控器控制台表头。
-
+        
         如果 CONSOLE_FORMAT 为三元组 (fmt, keys, headers)，自动使用 headers 列表
         格式化为表头文字，数字格式自动降级为字符串格式。
         如果为二元组 (fmt, keys)，返回格式字符串（向后兼容）。
         否则子类需重写此方法。
-
+        
         Returns:
             str: 监控器控制台表头字符串
         """
@@ -694,9 +708,9 @@ class BaseMonitor(ABC):
         # type: (Dict[str, Any]) -> str
         """
         将事件数据格式化为控制台输出行。
-
+        
         自动拼接时间戳与监控器数据行。
-
+        
         Args:
             data: 原始事件数据
 
@@ -711,10 +725,10 @@ class BaseMonitor(ABC):
         # type: (Dict[str, Any]) -> str
         """
         将事件数据格式化为控制台数据行。
-
+        
         如果子类声明了 CONSOLE_FORMAT，自动从中提取数据并格式化。
         否则子类需重写此方法。
-
+        
         Args:
             data: 原始事件数据
 
@@ -730,3 +744,103 @@ class BaseMonitor(ABC):
             except (IndexError, KeyError):
                 return " | ".join(str(v) for v in values)
         return ""
+
+    # ==================== Prometheus 格式化 ====================
+
+    def get_prometheus_config(self):
+        # type: () -> dict
+        """
+        获取Prometheus指标配置
+
+        Returns:
+            dict: Prometheus配置字典，包含 labels 和 metrics
+        """
+        return self.PROMETHEUS_CONFIG or {}
+
+    def extract_prometheus_labels(self, data):
+        # type: (Dict[str, Any]) -> Dict[str, str]
+        """
+        从数据中提取Prometheus标签
+        
+        标签定义格式（与CSV_COLUMNS兼容）:
+          ("label_name", "data_key")                   — 简单映射
+          ("label_name", "data_key", transform_fn)     — 带转换
+          ("label_name", ("k1","k2"), transform_fn)    — 多键转换
+
+        Args:
+            data: 原始事件数据
+
+        Returns:
+            Dict[str, str]: 标签名到值的映射
+        """
+        config = self.PROMETHEUS_CONFIG
+        if not config:
+            return {}
+
+        labels_config = config.get("labels", [])
+        labels = {}
+        for label_def in labels_config:
+            label_name = label_def[0]
+            if len(label_def) == 2:
+                # 简单映射: ("label_name", "data_key")
+                labels[label_name] = str(data.get(label_def[1], "") or "")
+            else:
+                # 带转换: ("label_name", "data_key", fn) 或 ("label_name", ("k1","k2"), fn)
+                value = self._extract_column_value(label_def[1:], data)
+                labels[label_name] = str(value) if value is not None else ""
+        return labels
+
+    def extract_prometheus_metrics(self, data):
+        # type: (Dict[str, Any]) -> Dict[str, float]
+        """
+        从数据中提取Prometheus指标值
+        
+        指标定义格式:
+          (metric_name, metric_type, help_text, value_source)
+          (metric_name, metric_type, help_text, value_source, transform_fn)
+
+        value_source 支持:
+          "key"                        — 简单取值 data["key"]
+          ("k1", "k2")                 — 多键传递给 transform_fn
+
+        transform_fn:
+          None                         — 直接使用原始值
+          callable                     — fn(raw_value) 或 fn(k1_value, k2_value)
+
+        Args:
+            data: 原始事件数据
+
+        Returns:
+            Dict[str, float]: 指标名到数值的映射
+        """
+        config = self.PROMETHEUS_CONFIG
+        if not config:
+            return {}
+
+        metrics_config = config.get("metrics", [])
+        result = {}
+
+        for metric_def in metrics_config:
+            metric_name = metric_def[0]
+            value_source = metric_def[3]
+            transform_fn = metric_def[4] if len(metric_def) > 4 else None
+
+            try:
+                if isinstance(value_source, (tuple, list)):
+                    raw_values = tuple(data.get(k, 0) for k in value_source)
+                    if transform_fn is not None:
+                        value = transform_fn(*raw_values)
+                    else:
+                        value = raw_values[0] if len(raw_values) == 1 else raw_values
+                else:
+                    raw_value = data.get(value_source, 0)
+                    if transform_fn is not None:
+                        value = transform_fn(raw_value)
+                    else:
+                        value = raw_value
+
+                result[metric_name] = float(value) if value is not None else 0.0
+            except (TypeError, ValueError, KeyError, IndexError):
+                result[metric_name] = 0.0
+
+        return result

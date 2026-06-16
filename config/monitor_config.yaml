@@ -95,3 +95,29 @@ monitors:
     enabled: true
     interval: 2              # 统计周期（秒）
     min_switches: 10         # 最小切换次数过滤
+
+  # UDP网络通信监控
+  udp:
+    enabled: true
+    interval: 2              # 统计周期（秒）
+    target_ports: []         # 监控的端口列表（空=监控所有）
+    target_processes: []     # 监控的进程列表（空=监控所有）
+    min_packet_size: 0       # 最小报文大小过滤（字节）
+
+  # 共享内存通信监控
+  shm:
+    enabled: true
+    interval: 2              # 统计周期（秒）
+    target_shmids: []        # 监控的shmid列表（空=监控所有）
+    target_processes: []     # 监控的进程列表（空=监控所有）
+    monitor_contention: true # 监控锁竞争
+    monitor_barriers: false  # 监控内存屏障（开销较大）
+
+  # 交易进程级监控
+  process_trade:
+    enabled: true
+    interval: 2              # 统计周期（秒）
+    zmb_processes: []        # ZMB进程名列表
+    zme_processes: []        # ZME进程名列表
+    monitor_syscalls: true   # 监控系统调用
+    monitor_ipc: true        # 监控IPC通信
