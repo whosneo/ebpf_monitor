@@ -1,0 +1,74 @@
+groups:
+  - name: ebpf_monitor_alerts
+    rules:
+      - alert: EbpfMonitorDown
+        expr: ebpf_monitor_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "eBPF monitor is down"
+          description: "The eBPF monitoring tool has been unreachable for more than 1 minute."
+
+      - alert: HighSyscallErrorRate
+        expr: ebpf_monitor_syscall_error_ratio > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High syscall error rate: {{ $labels.comm }}"
+          description: "Process {{ $labels.comm }} has syscall error ratio {{ $value | humanizePercentage }} for {{ $labels.syscall_name }} ({{ $labels.category }})."
+
+      - alert: HighIOLatency
+        expr: ebpf_monitor_bio_latency_avg_seconds > 0.01
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High IO latency: {{ $labels.comm }}"
+          description: "Process {{ $labels.comm }} has average BIO latency {{ $value | humanizeDuration }} (type: {{ $labels.io_type_str }})."
+
+      - alert: HighOpenErrorRate
+        expr: ebpf_monitor_open_error_ratio > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High file open error rate: {{ $labels.comm }}"
+          description: "Process {{ $labels.comm }} has file open error ratio {{ $value | humanizePercentage }} for {{ $labels.filename }}."
+
+      - alert: HighContextSwitchRate
+        expr: rate(ebpf_monitor_context_switch_count[5m]) > 1000
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "High context switch rate: {{ $labels.comm }}"
+          description: "Process {{ $labels.comm }} on CPU {{ $labels.cpu }} has context switch rate {{ $value }}/s."
+
+      - alert: HighShmContention
+        expr: ebpf_monitor_shm_contention_ratio > 0.5
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High SHM contention: {{ $labels.comm }}"
+          description: "SHM segment {{ $labels.shmid }} accessed by {{ $labels.comm }} has contention ratio {{ $value | humanizePercentage }}."
+
+      - alert: HighPageFaultRate
+        expr: rate(ebpf_monitor_page_fault_count[5m]) > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High page fault rate: {{ $labels.comm }}"
+          description: "Process {{ $labels.comm }} has page fault rate {{ $value }}/s (type: {{ $labels.fault_type_str }})."
+
+      - alert: HighTradeProcessErrors
+        expr: ebpf_monitor_process_trade_error_ratio > 0.01
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trade process errors detected: {{ $labels.comm }}"
+          description: "Trade process {{ $labels.comm }} has syscall error ratio {{ $value | humanizePercentage }} in category {{ $labels.category }}."
