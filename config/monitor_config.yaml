@@ -121,3 +121,13 @@ monitors:
     zme_processes: []        # ZME进程名列表
     monitor_syscalls: true   # 监控系统调用
     monitor_ipc: true        # 监控IPC通信
+
+  # 低延时网卡监控（nic，SWIFT-2200N）- 已实现，默认禁用等待真实硬件验证
+  # 驱动 driver-specific 符号为占位，硬件验证完成前保持 enabled: false（可用 -m nic 显式运行）
+  nic:
+    enabled: false          # 改为 true 启用（需真实低延时网卡环境）
+    interval: 2
+    target_interfaces: []   # e.g. ["eth0", "eth1"] 或留空监控所有
+    target_processes: []    # e.g. ["zmb", "trade"] 过滤进程
+    min_queue_depth: 0      # 最小队列深度过滤
+    min_latency_us: 0       # 最小延迟过滤（微秒）

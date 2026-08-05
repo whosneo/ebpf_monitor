@@ -195,6 +195,24 @@ class MonitorDataUtils(object):
         else:
             return str(count)
 
+    # ==================== NIC 专用（queue / buffer） ====================
+
+    @staticmethod
+    def calc_queue_depth_avg(total_depth, count):
+        # type: (int, int) -> float
+        """平均队列深度估算"""
+        if count > 0:
+            return total_depth / float(count)
+        return 0.0
+
+    @staticmethod
+    def calc_queue_utilization(current, max_depth):
+        # type: (int, int) -> float
+        """队列利用率 %"""
+        if max_depth > 0:
+            return (current / float(max_depth)) * 100.0
+        return 0.0
+
     @staticmethod
     def format_error_count(error_count, error_rate):
         # type: (int, float) -> str
