@@ -2,12 +2,14 @@
 
 ## 概述
 
-本文档描述当前 eBPF 系统监控工具的实际架构。项目是 eBPF 监控系统，基于 eBPF + BCC 实现低开销监控，支持 12 个监控器，输出 CSV/控制台/Prometheus。
+本文档描述当前 eBPF 系统监控工具的实际架构。项目是 eBPF 监控系统，基于 eBPF + BCC 实现低开销监控，支持 12 个监控器（含 nic 低延时网卡 for SWIFT-2200N），输出 CSV/控制台/Prometheus。
 
 ## 当前真实状态
 
-**支持的监控器（12 个）**：
-exec（事件）、open、bio、syscall、func、interrupt、page_fault、context_switch、udp、shm、process_trade、nic（低延时网卡，聚合统计，关注队列深度/缓冲区/延迟）。
+**支持的监控器（12 个，当前真实状态）**：
+exec（事件）、open、bio、syscall、func、interrupt、page_fault、context_switch、udp、shm、process_trade、nic。
+
+**nic（低延时网卡）**：已实现（聚合统计，关注队列深度/缓冲区/延迟，针对 SWIFT-2200N）。默认 `enabled: false`，driver-specific 符号为占位，待真实硬件验证后启用；辅助采集 collect_nic_metrics.py 已支持。
 
 **核心特性（已实现）**：
 - 依赖注入（ApplicationContext + MonitorContext）替代单例，提升可测试性。
@@ -30,7 +32,7 @@ exec（事件）、open、bio、syscall、func、interrupt、page_fault、contex
 - **注册与发现**：decorators.register_monitor + monitor_registry 动态导入。
 - **输出**：output_controller 统一处理 CSV/Console/Prometheus；prometheus_writer/metrics 支持 declarative 配置。
 - **eBPF C 程序**：每个监控器对应 src/ebpf/<name>.c，使用 BCC 编译加载。通用探针优先，driver-specific 用 TODO 占位。
-- **分析**：analysis/analyzer.py + data_utils.py（支持 nic 的 queue_depth_analysis、latency_histogram、spike 报告集成等）。
+- **分析**：analysis/analyzer.py + data_utils.py（支持现有监控器；nic 已有基础统计，queue_depth_analysis、latency_histogram、spike 报告自动集成计划在 Phase 5 进一步增强）。
 
 ## 数据流
 
