@@ -69,7 +69,7 @@ class EBPFAnalyzer:
         self.reports_dir = os.path.join(reports_dir, self.hostname)
         self.base_reports_dir = reports_dir  # 保存基础reports目录，用于对比功能
         # 更新监控器类型列表
-        self.monitor_types = ['exec', 'syscall', 'bio', 'interrupt', 'func', 'open', 'page_fault']
+        self.monitor_types = ['exec', 'syscall', 'bio', 'interrupt', 'func', 'open', 'page_fault', 'nic']
 
         # 确保目录存在
         if not os.path.exists(self.daily_data_dir):
@@ -197,6 +197,14 @@ class EBPFAnalyzer:
         elif monitor_type in ['interrupt', 'page_fault']:
             if 'cpu' in df.columns:
                 df['cpu'] = pd.to_numeric(df['cpu'], errors='coerce').fillna(0).astype(int)
+
+        elif monitor_type == 'nic':
+            for col in ['count', 'total_bytes', 'queue_events']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+            for col in ['avg_latency_us', 'min_latency_us', 'max_latency_us']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
             if 'fault_type' in df.columns:
                 df['fault_type'] = pd.to_numeric(df['fault_type'], errors='coerce').fillna(0).astype(int)
             if 'irq_type' in df.columns:
@@ -1413,6 +1421,38 @@ class EBPFAnalyzer:
 
             print(f"\n  负载均衡度: {balance_score * 100:.1f}% ({balance_level})")
 
+    # ==================== NIC 分析 (Phase 5) ====================
+    @capture_output_to_file
+    def analyze_nic(self, date_str: str):
+        """分析低延时网卡（nic）数据：队列深度、延迟、缓冲"""
+        df = self.load_daily_data(date_str, 'nic')
+        if df is None or df.empty:
+            return
+
+        print(f"\n{'=' * 100}")
+        print(f"NIC 低延时网卡监控数据深度分析 - {date_str} (SWIFT-2200N 相关)")
+        print(f"{'=' * 100}\n")
+
+        total_pkts = df['packet_count'].sum() if 'packet_count' in df.columns else df.get('count', pd.Series()).sum()
+        total_bytes = df['total_bytes'].sum() if 'total_bytes' in df.columns else 0
+        procs = df['comm'].nunique() if 'comm' in df.columns else 0
+
+        print("【概览】")
+        print(f"  总报文: {int(total_pkts):,}")
+        print(f"  总字节: {total_bytes:,}")
+        print(f"  涉及进程: {procs}")
+
+        if 'avg_latency_us' in df.columns:
+            avg_lat = df['avg_latency_us'].mean()
+            p99 = df['avg_latency_us'].quantile(0.99) if len(df) > 0 else 0
+            print(f"  平均延迟(us): {avg_lat:.1f}")
+            print(f"  P99 延迟(us): {p99:.1f}")
+
+        if 'queue_events' in df.columns:
+            total_q = df['queue_events'].sum()
+            print(f"  队列事件总数: {int(total_q):,}")
+
+        print("\n  (完整队列深度分析 + spike 报告建议结合 analysis/collect_nic_metrics.py 输出)")
 
 if __name__ == '__main__':
     """主函数"""
@@ -1420,7 +1460,7 @@ if __name__ == '__main__':
     parser.add_argument('--daily-dir', default='./daily_data', help='预处理数据目录路径')
     parser.add_argument('--reports-dir', default='./reports', help='分析报告输出目录')
     parser.add_argument('--date', required=True, help='分析日期，格式: YYYYMMDD')
-    parser.add_argument('--type', choices=['exec', 'bio', 'func', 'open', 'syscall', 'interrupt', 'page_fault', 'all'],
+    parser.add_argument('--type', choices=['exec', 'bio', 'func', 'open', 'syscall', 'interrupt', 'page_fault', 'nic', 'all'],
                         default='all', help='监控器类型')
     parser.add_argument('--hostname', help='指定主机名（默认使用当前主机名）')
 

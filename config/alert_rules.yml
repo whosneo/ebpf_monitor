@@ -28,6 +28,25 @@ groups:
           summary: "High IO latency: {{ $labels.comm }}"
           description: "Process {{ $labels.comm }} has average BIO latency {{ $value | humanizeDuration }} (type: {{ $labels.io_type_str }})."
 
+      # nic (low latency NIC) example - enable after nic prometheus metrics exported
+      - alert: HighNicLatency
+        expr: nic_avg_latency_us > 100   # 阈值示例（us）
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High NIC latency: {{ $labels.comm }}"
+          description: "Process {{ $labels.comm }} direction {{ $labels.direction }} avg latency > 100us (SWIFT-2200N low-latency card)."
+
+      - alert: NicQueuePressure
+        expr: nic_queue_events > 1000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NIC queue pressure detected"
+          description: "High queue_events on low-latency NIC (check hardware queue depth via collect_nic_metrics)."
+
       - alert: HighOpenErrorRate
         expr: ebpf_monitor_open_error_ratio > 0.05
         for: 5m
