@@ -85,3 +85,38 @@ monitors:
 - 下一阶段工作唯一来源：docs/ROADMAP.md（执行顺序 1-2-4-5-3；当前正按顺序推进 Phase 2 spike + 测试框架 + nic 实现）。
 
 更多细节与验收标准见 ROADMAP.md 和 docs/adr/0001-documentation-strategy-and-core-constraints.md。
+
+
+## Trading server profile
+
+```bash
+sudo python main.py -c config/monitor_config.trading_server.yaml
+```
+
+- 减负：默认关闭多数系统级重监控器，启用 udp/shm/process_trade。
+- `process_trade` 的 `zmb_processes` / `zme_processes` 在 trading profile 中为**非空**占位；请改为真实 comm。
+- 主配置中二者皆空 = 监控全部进程（全机 `raw_syscalls`，开销大）。
+
+## process_trade pre-fix note
+
+修复前 Python 期望 map `process_trade_stats`，C 使用 `trade_syscall_stats`，CSV 可能一直为空。现已统一为 `process_trade_stats` / `process_trade_ipc_stats`。
+
+## udp / nic filtering
+
+- `target_processes`：已生效（空列表 = 全部）。
+- `target_ports`（udp）、`target_interfaces`（nic）：**暂不支持**（C 侧 key 无字段）；非空配置会打 WARNING。
+
+## ufunc（用户态函数）
+
+- 默认 `enabled: false`。
+- 配置 `targets[].binary` + `symbols[].name`（运维从有源码的构建提供；实现不臆造交易符号）。
+- 使用 BCC uprobe；不宣称所有 3.10 内核可用；失败时该监控器 soft-fail，不影响其它监控器。
+
+## Health / restart
+
+- 进程内 watchdog 可按 app 配置自动 `restart_monitor`（Factory 新建，CSV 新文件）。
+- `get_health()` 供运维/日志使用；**无**内置 Prometheus HTTP 服务（勿依赖 9200 端口 unless 自行接入）。
+
+## CSV retention
+
+见 `output.csv_retention`（max_age_days / max_total_bytes_mb / max_files_per_monitor）。

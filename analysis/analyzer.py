@@ -69,7 +69,7 @@ class EBPFAnalyzer:
         self.reports_dir = os.path.join(reports_dir, self.hostname)
         self.base_reports_dir = reports_dir  # 保存基础reports目录，用于对比功能
         # 更新监控器类型列表
-        self.monitor_types = ['exec', 'syscall', 'bio', 'interrupt', 'func', 'open', 'page_fault', 'nic']
+        self.monitor_types = ['exec', 'syscall', 'bio', 'interrupt', 'func', 'open', 'page_fault', 'nic', 'udp', 'process_trade', 'ufunc']
 
         # 确保目录存在
         if not os.path.exists(self.daily_data_dir):

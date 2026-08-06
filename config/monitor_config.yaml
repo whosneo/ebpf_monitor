@@ -8,6 +8,12 @@ app:
   url: https://github.com/whosneo/ebpf_monitor
   environment: development
   debug: true
+  watchdog_enabled: true
+  watchdog_interval: 10
+  watchdog_stale_intervals: 5
+  watchdog_error_delta: 50
+  watchdog_max_restarts_per_window: 3
+  watchdog_restart_window_s: 60
 
 # 日志配置
 logging:
@@ -40,6 +46,11 @@ output:
   output_thread_sleep: 0.1          # 输出线程休眠时间（秒）
   csv_delimiter: ","                # CSV分隔符
   include_header: true              # 是否包含头部
+  csv_retention:
+    enabled: true
+    max_age_days: 7
+    max_total_bytes_mb: 4096
+    max_files_per_monitor: 64
 
 # 监控器配置
 monitors:
@@ -127,7 +138,24 @@ monitors:
   nic:
     enabled: false          # 改为 true 启用（需真实低延时网卡环境）
     interval: 2
-    target_interfaces: []   # e.g. ["eth0", "eth1"] 或留空监控所有
+    target_interfaces: []   # unsupported until C key has interface field (WARNING if non-empty)
     target_processes: []    # e.g. ["zmb", "trade"] 过滤进程
     min_queue_depth: 0      # 最小队列深度过滤
     min_latency_us: 0       # 最小延迟过滤（微秒）
+
+  # 用户态函数监控（BCC uprobe）— 默认关闭；符号/路径由运维提供
+  ufunc:
+    enabled: false
+    interval: 2
+    target_processes: []
+    targets: []
+    # 示例（占位，禁止使用真实未授权符号）:
+    # targets:
+    #   - binary: "/path/to/trade_app"
+    #     symbols:
+    #       - name: "handle_order"
+    #         retprobe: false
+    #       - name: "match"
+    #         retprobe: true
+    probe_limit: 32
+    resolve_from_pid: true

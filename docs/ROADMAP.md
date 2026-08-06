@@ -1,6 +1,6 @@
 # eBPF 监控系统 - 当前状态与下一阶段工作
 
-**最后更新**：2026-07-03 (SWIFT-2200N 已实现全部按序推进：文档修正 + Phase2 spike (nic.c+report) + Phase4 测试骨架 + Phase5 分析增强 + Phase3 nic 正式监控器 + 集成。当前真实支持 12 个监控器。)
+**最后更新**：2026-08-06（实现 design: 长期稳定 + 多进程目标 + ufunc）
 
 本文档是项目下一阶段工作的**唯一真相来源**。只记录当前真实事实和有明确验收标准的短期目标，不包含任何未来愿景或长期规划。
 
@@ -8,36 +8,28 @@
 
 本项目是**eBPF 监控系统**，基于 eBPF + BCC 实现低开销系统监控。
 
-**当前支持的监控器（共 12 个，真实状态）**：
-- **exec**：进程执行监控（单条记录模式），兼容老内核。
-- **open**：文件打开监控（聚合统计）。
-- **bio**：块 I/O 操作监控（聚合统计，延迟与吞吐量）。
-- **syscall**：系统调用监控（聚合统计，支持分类和错误率）。
-- **func**：内核函数监控（kprobe，支持通配符，聚合统计）。
-- **interrupt**：中断监控（聚合统计）。
-- **page_fault**：页面错误监控（聚合统计，支持 NUMA）。
-- **context_switch**：上下文切换监控（聚合统计）。
-- **udp**：UDP 网络通信监控（聚合统计，支持方向、延迟、吞吐、端口/进程过滤，交易中间件场景）。
-- **shm**：System V 共享内存通信监控（聚合统计，支持竞争率计算）。
-- **特定进程**（process_trade）：进程级监控（专用，聚合统计，系统调用分类 + IPC + 错误率）。
-- **nic**：低延时网卡监控（已实现）。聚合统计，硬件队列深度/缓冲区/网卡级延迟，支持接口/进程过滤。SWIFT-2200N（中科驭数）专项支持。Phase 2 spike 完成（见 analysis/nic_spike_verification.md）。推荐统计聚合模式。
+**当前支持的监控器（共 13 个）**：
+- **exec**：进程执行监控（事件模式）。
+- **open / bio / syscall / interrupt / page_fault / context_switch**：系统级聚合统计。
+- **func**：内核函数 kprobe（`/proc/kallsyms`），**不是**用户态 uprobe。
+- **udp / shm / nic / process_trade**：可按进程名过滤（ProcessTargetManager）；udp/nic 的 `target_ports` / `target_interfaces` **未实现内核过滤**（非空配置打 WARNING）。
+- **process_trade**：map 为 `process_trade_stats` + `process_trade_ipc_stats`；支持 `monitor_syscalls` / `monitor_ipc` 门控；**pre-fix 版本曾因 map 名不一致导致空 CSV**。
+- **ufunc**（新建）：BCC uprobe/uretprobe 用户态函数统计；默认 `enabled: false`；符号/路径由运维提供；uprobe 不可用时软失败。
+- **nic**：默认 `enabled: false`，driver-specific 占位。
 
-**输出与集成**：
-- 双模式输出：单监控器支持控制台 + CSV；多监控器主要 CSV。
-- 内核侧聚合统计模式为主（数据量减少 90%+）。
-- 支持 Prometheus 指标导出（可配置，端口 9200，默认关闭）。
-- 提供 Grafana 仪表板和告警规则（alert_rules.yml 包含 bio、syscall、open、context_switch、shm、page_fault、process_trade、nic 等规则）。
-- 守护进程模式支持。
+**运行时稳定性（已实现）**：
+- `restart_monitor`：Factory 新建实例（不复用 cleanup 后对象）。
+- Watchdog：死线程 / stale success / error delta + 重启退避。
+- `get_health()` + 日志；**无**内置 Prometheus HTTP exporter（文档不再宣称端口 9200 已实现）。
+- CSV retention（可配置）；输出缓冲 drop 计数。
+- `config/monitor_config.trading_server.yaml` 减负 profile（不改主 yaml 重监控默认）。
 
-**架构要点**：
-- 依赖注入（ApplicationContext）替代单例，提升可测试性。
-- 监控器通过装饰器自动注册。
-- 分层锁机制优化并发。
+**输出**：控制台 / CSV / 声明式 PROMETHEUS_CONFIG 提取辅助（无 HTTP 服务）。
 
-**已知约束**：
+**硬约束**：
 - 必须使用 root 或 CAP_BPF。
-- 兼容 Linux 内核 3.10+（重点支持老内核场景）。
-- **硬约束**：不迁移 CO-RE / libbpf，持续使用 BCC 路线。
+- 兼容 Linux 内核 3.10+（系统级 kprobe/tracepoint 路线）。
+- **不迁移 CO-RE / libbpf**；ufunc 的 uprobe 为 BCC attach，不宣称全局 3.10 uprobe 可用。
 
 ## 硬约束
 
@@ -46,65 +38,26 @@
 - 所有目标必须可验证（有明确的验收标准）。
 - 新能力必须在现有 BCC + 统计/事件模式框架下务实实现。
 
-## 下一阶段工作（执行顺序 1-2-4-5-3）
+## 下一阶段工作（短期可验证）
 
-### 1. 文档重写 + 债务补写 + 第一个 ADR
-**目标**：彻底清理过时和 AI 臆想内容，建立清晰的事实来源和决策记录。
+### A. 真机验证 ufunc / pid_allow
+**目标**：在目标交易机上用运维提供的 binary+symbols 验证 ufunc 与 pid_allow。
 **验收标准**：
-- README.md、ARCHITECTURE.md、USER_GUIDE.md（含 Prometheus 合并）完成重写。
-- 新增 ROADMAP.md 和 docs/adr/0001-... 
-- 老规划文档直接删除。
-- 所有文档中完整补写 udp、shm、process_trade、Prometheus 集成等实际能力描述。
-- 文档中无任何愿景性语言。
+- `ufunc` load/attach 成功或明确 soft-fail 原因记入日志。
+- process_trade/udp 在非空 targets 下 cflags 含 `-DENABLE_PID_FILTER=1` 且开销可接受。
 
-### 2. 低延时网卡验证 spike（中科驭数 SWIFT-2200N）
-**目标**：在真实 SWIFT-2200N 低延时网卡（中科驭数）上，验证系统级全量监控的数据量和可行性。
-**验收标准**：
-- 实现最小 spike 代码（重点捕获延迟 + 硬件队列深度 + 缓冲区数据）。使用通用 netdev/napi 探针 + collect_nic_metrics 关联。
-- 在目标服务器上运行，量化数据量（每秒事件/输出大小）。
-- 明确推荐输出模式（纯聚合 / 事件 / 混合）。推荐优先统计聚合。
-- 型号已补充（SWIFT-2200N，vendor 1f47）。更新本 ROADMAP。
-- 产生简要验证报告（可作为后续正式实现的输入）。
+### B. nic 真机与 driver 符号
+**目标**：SWIFT-2200N 上验证 nic 占位探针。
+**验收标准**：验证报告更新 `analysis/nic_spike_verification.md` 量化数据。
 
-**当前进展**（2026-07-03）：**已完成 Phase 2 最小 spike**。
-- nic.c 已实现（通用 TX/RX 探针 + latency 配对 + queue_events 占位 + SWIFT 注释）。
-- 验证报告：analysis/nic_spike_verification.md （含运行指令、harness 片段、模式推荐）。
-- collect_nic_metrics.py --product SWIFT-2200N 可并行采集硬件/缓冲指标。
-- 推荐：统计聚合模式。
-真实硬件上运行 spike 并补充量化数据后即可进入后续阶段。
-
-### 4. 基础测试框架建设
-**目标**：利用现有依赖注入架构，建立可维护的 Python 侧测试能力，防止新监控器继续积累无测试债务。
-**验收标准**：
-- 至少覆盖核心监控器逻辑（配置验证、should_collect、格式化、Prometheus 指标生成）。
-- 新监控器开发时必须包含对应测试。
-- 提供测试运行方式和覆盖率基线。
-- eBPF 加载部分以 smoke + 人工验证为主（不强求 C 侧单元测试）。
-
-### 5. 完善数据分析能力 + 完善数据展示能力
-**目标**：基于现有数据模型和 spike 结果，针对性增强分析和可视化能力（尤其是支持硬件队列深度、缓冲区、交易专项指标等）。
-**验收标准**：
-- 分析工具（analyzer.py 等）支持新监控器指标和高级统计（直方图、P99、队列维度等）。
-- Grafana 仪表板更新，增加针对低延时/交易场景的面板。
-- 文档中明确新增能力的用法和示例。
-- 所有增强必须基于已验证的数据模型。
-
-### 3. 正式低延时网卡监控实现
-**目标**：在验证（Phase 2）和测试框架（Phase 4）基础之上，交付生产可用的独立低延时网卡监控器（标准模板实现）。
-**验收标准**：
-- 完整监控器（Python + eBPF），符合本 ROADMAP 描述的原则（系统级全量、统计聚合、队列深度+缓冲区+网卡延迟）。
-- 集成到主流程、配置、Prometheus、告警（config/monitor_config.yaml 已添加示例）。
-- 完整文档更新（USER_GUIDE、ARCHITECTURE、ROADMAP 已包含 nic 描述和配置示例）。
-- 通过基础测试（unit + smoke 已配套）。
-- 在交易环境验证数据量和性能影响可接受（可先用 spike 验证工具）。
-
-**注意**：本阶段在执行顺序中排在 5 之后。当前（型号确认后）正按 2->4->5->3 顺序推进。
+### C. analyzer 扩展
+**目标**：analyzer 接入 process_trade / udp / ufunc 基础统计。
+**验收标准**：`analysis/analyzer.py` monitor_types 列表含上述类型且有至少一种分析路径。
 
 ## 已知限制与说明
 
-- 所有新监控器必须遵守“系统级全量 + 务实实现”的原则。
-- spike 结果将直接影响第 5 项和第 3 项的范围。
+- udp `target_ports`、nic `target_interfaces`：C key 无对应字段，配置非空仅 WARNING。
+- 主配置 `process_trade` 空 zmb+zme = 全进程（开发语义）；交易机请用 trading_server profile 非空列表。
 - 任何偏离本 ROADMAP 的工作，必须先更新本文档或新增 ADR。
-- 当前 nic 已完成 Phase 2/3 实现（nic.py + nic.c + 配置/Prometheus/告警集成），默认禁用（enabled: false），等待真实硬件上完成验证后再默认启用；Phase 5 的队列深度深度分析、spike 报告自动集成仍在推进。
 
 **维护规则**：本文件是活文档。每次完成一项工作后，必须更新“当前真实状态”和相应目标的完成情况。

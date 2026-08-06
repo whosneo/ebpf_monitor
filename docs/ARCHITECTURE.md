@@ -2,12 +2,12 @@
 
 ## 概述
 
-本文档描述当前 eBPF 系统监控工具的实际架构。项目是 eBPF 监控系统，基于 eBPF + BCC 实现低开销监控，支持 12 个监控器（含 nic 低延时网卡 for SWIFT-2200N），输出 CSV/控制台/Prometheus。
+本文档描述当前 eBPF 系统监控工具的实际架构。项目是 eBPF 监控系统，基于 eBPF + BCC 实现低开销监控，支持 **13 个监控器**（含 ufunc 用户态函数、nic 低延时网卡 for SWIFT-2200N），输出 CSV/控制台；`PROMETHEUS_CONFIG` 为声明式提取辅助（**无**内置 Prometheus HTTP exporter）。
 
 ## 当前真实状态
 
-**支持的监控器（12 个，当前真实状态）**：
-exec（事件）、open、bio、syscall、func、interrupt、page_fault、context_switch、udp、shm、process_trade、nic。
+**支持的监控器（13 个，当前真实状态）**：
+exec（事件）、open、bio、syscall、func（内核 kprobe）、interrupt、page_fault、context_switch、udp、shm、process_trade、nic、**ufunc**（BCC uprobe，默认 disabled）。
 
 **nic（低延时网卡）**：已实现（聚合统计，关注队列深度/缓冲区/延迟，针对 SWIFT-2200N）。默认 `enabled: false`，driver-specific 符号为占位，待真实硬件验证后启用；辅助采集 collect_nic_metrics.py 已支持。
 
@@ -16,21 +16,28 @@ exec（事件）、open、bio、syscall、func、interrupt、page_fault、contex
 - 监控器自动注册（@register_monitor）。
 - 声明式配置（CONFIG_SCHEMA）、输出（CSV_COLUMNS / CONSOLE_FORMAT / PROMETHEUS_CONFIG）。
 - 统计聚合模式为主（内核 map 累积 + 定期 pop 输出），部分为事件模式。
+- ProcessTargetManager + 可选 BPF `pid_allow`（写新后删旧，运行时 refresh）。
+- 运行时：`restart_monitor`（Factory 新建）、watchdog、`get_health` 60s 限速日志、CSV retention。
 - Python 侧使用 MonitorDataUtils 统一延迟/吞吐/大小计算。
 - 测试框架：pytest + MagicMock bcc + DI fixtures（支持 macOS/CI）。
 
 **硬约束**：
-- 仅使用 BCC + kprobe/tracepoint，兼容 3.10+ 内核。
+- 仅使用 BCC + kprobe/tracepoint（ufunc 额外允许 BCC uprobe attach），兼容 3.10+ 内核路线（uprobe 不宣称全局 3.10 可用）。
 - 不迁移 CO-RE / libbpf。
 - 文档只记录当前事实或有明确验收标准的短期目标（见 ROADMAP.md）。
 
 ## 主要组件
 
+- **ProcessTargetManager**（`src/utils/process_target_manager.py`）：按进程名维护 PID 集合，`sync_pid_allow_map` 写新后删旧。
+- **ufunc**：BCC uprobe 用户态函数统计，默认 disabled。
+- **稳定性**：`eBPFMonitor.restart_monitor` / watchdog / `get_health`；CSV retention；无 Prometheus HTTP exporter。
+
+
 - **main.py / ebpf_monitor.py**：入口与主控制器，加载配置、创建 ApplicationContext、启动启用的监控器。
 - **ApplicationContext**：依赖注入容器，管理 ConfigManager、LogManager、OutputController、MonitorRegistry 等。
 - **BaseMonitor**：所有监控器的基类。负责 eBPF 加载（get_ebpf_code）、_collect_and_output（原子 pop）、格式化派发、should_collect 过滤。子类仅需声明 CONFIG_SCHEMA、CSV/CONSOLE/PROMETHEUS 及可选 should_collect/_initialize。
 - **注册与发现**：decorators.register_monitor + monitor_registry 动态导入。
-- **输出**：output_controller 统一处理 CSV/Console/Prometheus；prometheus_writer/metrics 支持 declarative 配置。
+- **输出**：output_controller 统一处理 CSV/Console/Prometheus；PROMETHEUS_CONFIG 声明式提取辅助；**无**内置 Prometheus HTTP exporter。
 - **eBPF C 程序**：每个监控器对应 src/ebpf/<name>.c，使用 BCC 编译加载。通用探针优先，driver-specific 用 TODO 占位。
 - **分析**：analysis/analyzer.py + data_utils.py（支持现有监控器；nic 已有基础统计，queue_depth_analysis、latency_histogram、spike 报告自动集成计划在 Phase 5 进一步增强）。
 

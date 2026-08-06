@@ -1,0 +1,148 @@
+# 交易服务器减负配置 profile（不修改主 monitor_config.yaml 重监控默认）
+# 使用: python main.py -c config/monitor_config.trading_server.yaml
+#
+# 警告: process_trade 空 zmb+zme 会在全机 raw_syscalls 上记账；本 profile 要求非空列表。
+
+app:
+  name: ebpf_monitor
+  version: 1.0.0
+  description: eBPF Monitor for trading servers
+  author: bwyu
+  email: bwyu@czce.com.cn
+  url: https://github.com/whosneo/ebpf_monitor
+  environment: production
+  debug: false
+  watchdog_enabled: true
+  watchdog_interval: 10
+  watchdog_stale_intervals: 5
+  watchdog_error_delta: 50
+  watchdog_max_restarts_per_window: 3
+  watchdog_restart_window_s: 60
+
+logging:
+  version: 1
+  level: INFO
+  formatters:
+    detailed:
+      format: "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s"
+    simple:
+      format: "%(asctime)s [%(levelname)s] %(message)s"
+  handlers:
+    console:
+      class: logging.StreamHandler
+      formatter: simple
+      stream: ext://sys.stdout
+    file:
+      class: logging.handlers.TimedRotatingFileHandler
+      formatter: detailed
+      filename: monitor.log
+      when: D
+      interval: 1
+      backupCount: 365
+
+output:
+  buffer_size: 5000
+  batch_size: 1000
+  large_batch_threshold: 500
+  flush_interval: 2.0
+  output_thread_sleep: 0.1
+  csv_delimiter: ","
+  include_header: true
+  csv_retention:
+    enabled: true
+    max_age_days: 7
+    max_total_bytes_mb: 4096
+    max_files_per_monitor: 64
+
+monitors:
+  exec:
+    enabled: false
+
+  open:
+    enabled: false
+    interval: 2
+    min_count: 1
+    show_errors_only: false
+
+  bio:
+    enabled: false
+    interval: 2
+    min_latency_us: 0
+
+  syscall:
+    enabled: false
+    interval: 2
+    monitor_categories:
+      file_io: true
+      network: true
+      memory: true
+      process: true
+      signal: false
+      time: false
+      ipc: true
+    show_errors_only: false
+
+  func:
+    enabled: false
+    interval: 2
+    patterns: ["vfs_read", "vfs_write"]
+    probe_limit: 10
+
+  interrupt:
+    enabled: false
+    interval: 2
+
+  page_fault:
+    enabled: false
+    interval: 2
+
+  context_switch:
+    enabled: false
+    interval: 2
+    min_switches: 10
+
+  udp:
+    enabled: true
+    interval: 2
+    target_ports: []
+    target_processes: ["zmb", "zme"]
+    min_packet_size: 0
+
+  shm:
+    enabled: true
+    interval: 2
+    target_shmids: []
+    target_processes: ["zmb", "zme"]
+    monitor_contention: true
+    monitor_barriers: false
+
+  process_trade:
+    enabled: true
+    interval: 2
+    # D13: trading profile 静态非空（占位 comm，部署时改为真实进程名）
+    zmb_processes: ["zmb"]
+    zme_processes: ["zme"]
+    monitor_syscalls: true
+    monitor_ipc: true
+
+  nic:
+    enabled: false
+    interval: 2
+    target_interfaces: []
+    target_processes: ["zmb", "zme"]
+    min_queue_depth: 0
+    min_latency_us: 0
+
+  ufunc:
+    enabled: false
+    interval: 2
+    target_processes: ["trade_app"]
+    targets: []
+    # 运维填写 binary + symbols（有源码方可解析）；示例占位:
+    # targets:
+    #   - binary: "/path/to/trade_app"
+    #     symbols:
+    #       - name: "handle_order"
+    #         retprobe: false
+    probe_limit: 32
+    resolve_from_pid: true
