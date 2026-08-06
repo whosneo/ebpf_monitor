@@ -42,7 +42,14 @@ class AppConfig(ValidatedConfig):
                  description="eBPF Monitor for Linux", author="bwyu",
                  email="bwyu@czce.com.cn",
                  url="https://github.com/whosneo/ebpf_monitor",
-                 environment="production", debug=False, **kwargs):
+                 environment="production", debug=False,
+                 watchdog_enabled=True,
+                 watchdog_interval=10,
+                 watchdog_stale_intervals=5,
+                 watchdog_error_delta=50,
+                 watchdog_max_restarts_per_window=3,
+                 watchdog_restart_window_s=60,
+                 **kwargs):
         self.name = name
         self.version = version
         self.description = description
@@ -51,6 +58,12 @@ class AppConfig(ValidatedConfig):
         self.url = url
         self.environment = environment
         self.debug = debug
+        self.watchdog_enabled = watchdog_enabled
+        self.watchdog_interval = watchdog_interval
+        self.watchdog_stale_intervals = watchdog_stale_intervals
+        self.watchdog_error_delta = watchdog_error_delta
+        self.watchdog_max_restarts_per_window = watchdog_max_restarts_per_window
+        self.watchdog_restart_window_s = watchdog_restart_window_s
         # 处理额外的关键字参数
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -167,7 +180,7 @@ class LogConfig(ValidatedConfig):
 class OutputConfig(ValidatedConfig):
     """输出控制器配置"""
 
-    def __init__(self, buffer_size=5000, batch_size=1000, large_batch_threshold=500, flush_interval=2.0, output_thread_sleep=0.1, csv_delimiter=",", include_header=True, **kwargs):
+    def __init__(self, buffer_size=5000, batch_size=1000, large_batch_threshold=500, flush_interval=2.0, output_thread_sleep=0.1, csv_delimiter=",", include_header=True, csv_retention=None, **kwargs):
         self.buffer_size = buffer_size
         self.batch_size = batch_size
         self.large_batch_threshold = large_batch_threshold
@@ -175,6 +188,12 @@ class OutputConfig(ValidatedConfig):
         self.output_thread_sleep = output_thread_sleep
         self.csv_delimiter = csv_delimiter
         self.include_header = include_header
+        self.csv_retention = csv_retention if csv_retention is not None else {
+            "enabled": False,
+            "max_age_days": 7,
+            "max_total_bytes_mb": 4096,
+            "max_files_per_monitor": 64,
+        }
 
         # 处理额外的关键字参数
         for key, value in kwargs.items():

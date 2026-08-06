@@ -91,12 +91,23 @@ class OutputController:
 
         # 缓冲区和批处理相关
         self.data_buffer = defaultdict(lambda: deque(maxlen=self.buffer_size))  # type: Dict[str, deque]
+        self.output_drop_count = defaultdict(int)  # type: Dict[str, int]
 
         # 初始化子组件
         self.csv_writer = CsvWriter(
-            self.output_dir, self.csv_delimiter, self.include_header, self.logger
+            self.output_dir,
+            self.csv_delimiter,
+            self.include_header,
+            self.logger,
+            retention=self.csv_retention,
         )
         self.console_writer = ConsoleWriter(self.logger)
+
+        # 启动时做一次 retention
+        try:
+            self.csv_writer.apply_retention(force=True)
+        except Exception as e:
+            self.logger.error("initial CSV retention failed: {}".format(e))
 
         self.logger.debug("输出控制器初始化完成")
 
@@ -110,6 +121,7 @@ class OutputController:
         self.output_thread_sleep = config.output_thread_sleep
         self.csv_delimiter = config.csv_delimiter
         self.include_header = config.include_header
+        self.csv_retention = getattr(config, "csv_retention", None) or {}
 
     def register_monitor(self, monitor_type, monitor_instance):
         # type: (str, BaseMonitor) -> None
@@ -196,7 +208,10 @@ class OutputController:
             # 使用buffer_lock保护对defaultdict的访问
             # 虽然deque.append()本身是线程安全的，但defaultdict的key创建不是
             with self.buffer_lock:
-                self.data_buffer[monitor_type].append(data)
+                buf = self.data_buffer[monitor_type]
+                if self.buffer_size > 0 and len(buf) >= self.buffer_size:
+                    self.output_drop_count[monitor_type] += 1
+                buf.append(data)
 
         except Exception as e:
             self.logger.error("处理eBPF数据失败 {}: {}".format(monitor_type, e))
@@ -257,6 +272,10 @@ class OutputController:
                 if current_time - last_flush_time >= self.flush_interval:
                     self.csv_writer.flush_all()
                     last_flush_time = current_time
+                    try:
+                        self.csv_writer.apply_retention(force=False)
+                    except Exception as e:
+                        self.logger.error("CSV retention error: {}".format(e))
 
                 time.sleep(self.output_thread_sleep)  # 短暂休眠
             except Exception as e:

@@ -34,6 +34,10 @@ class MonitorStatus:
         self.running = running  # type: bool
         self.error = error  # type: Optional[str]
         self.last_update = last_update  # type: float
+        self.restart_count = 0  # type: int
+        self.degraded = False  # type: bool
+        self.last_error_count_snapshot = 0  # type: int
+        self.restart_timestamps = []  # type: List[float]
 
 
 class eBPFMonitor:
@@ -74,6 +78,23 @@ class eBPFMonitor:
         self.state_lock = threading.RLock()
 
         self.stats = self._get_default_stats()  # 统计信息
+
+        # watchdog 配置（来自 app 配置，缺省安全值）
+        app_cfg = context.config_manager.get_app_config()
+        self.watchdog_enabled = bool(getattr(app_cfg, "watchdog_enabled", True))
+        self.watchdog_interval = float(getattr(app_cfg, "watchdog_interval", 10))
+        self.watchdog_stale_intervals = int(getattr(app_cfg, "watchdog_stale_intervals", 5))
+        self.watchdog_error_delta = int(getattr(app_cfg, "watchdog_error_delta", 50))
+        self.watchdog_max_restarts_per_window = int(
+            getattr(app_cfg, "watchdog_max_restarts_per_window", 3)
+        )
+        self.watchdog_restart_window_s = float(
+            getattr(app_cfg, "watchdog_restart_window_s", 60)
+        )
+        self._watchdog_thread = None  # type: Optional[threading.Thread]
+        self._watchdog_stop = threading.Event()
+        self._last_health_log_ts = 0.0  # type: float
+        self._health_log_interval_s = 60.0  # type: float  # design §9.2
 
         self._create_monitors()  # 创建监控器实例
 
@@ -181,6 +202,7 @@ class eBPFMonitor:
                 self.logger.error("监控器启动失败")
                 return False
             self.running = True
+            self._start_watchdog()
             self.logger.info("eBPF监控工具启动成功")
             return True
         except Exception as e:
@@ -235,6 +257,7 @@ class eBPFMonitor:
         self.logger.info("正在关闭监控工具...")
 
         try:
+            self._stop_watchdog()
             self.output_controller.stop()
             # 停止监控器
             self._stop_monitors()
@@ -305,3 +328,223 @@ class eBPFMonitor:
         """
         with self.state_lock:
             return self.running
+
+    def restart_monitor(self, name, reason=""):
+        # type: (str, str) -> bool
+        """
+        单监控器重启：永远经 Factory 新建实例（禁止复用 cleanup 后实例）。
+        """
+        with self.state_lock:
+            if name not in self.all_monitors:
+                self.logger.error("restart_monitor unknown type: {}".format(name))
+                return False
+
+            status = self.monitor_status.get(name)
+            if status is None:
+                status = MonitorStatus(name)
+                self.monitor_status[name] = status
+
+            # 退避：窗口内超限则 degraded
+            now = time.time()
+            window = self.watchdog_restart_window_s
+            status.restart_timestamps = [
+                t for t in status.restart_timestamps if now - t < window
+            ]
+            if len(status.restart_timestamps) >= self.watchdog_max_restarts_per_window:
+                status.degraded = True
+                self.logger.error(
+                    "monitor_restart degraded name=%s reason=%s (backoff)",
+                    name, reason,
+                )
+                return False
+
+            old = self.monitors.get(name)
+            if old is not None:
+                try:
+                    if old.is_running():
+                        old.stop()
+                except Exception as e:
+                    self.logger.error("restart stop {}: {}".format(name, e))
+                try:
+                    self.output_controller.unregister_monitor(name)
+                except Exception:
+                    pass
+                try:
+                    old.cleanup()
+                except Exception as e:
+                    self.logger.error("restart cleanup {}: {}".format(name, e))
+                self.monitors.pop(name, None)
+
+            try:
+                cfg = getattr(self.monitors_config, name)
+            except AttributeError:
+                status.error = "config missing"
+                return False
+
+            factory = self.context.get_monitor_factory()
+            try:
+                new = factory.create_monitor(self.all_monitors[name], name, cfg)
+            except Exception as e:
+                status.error = "create failed: {}".format(e)
+                self.logger.error("restart create {}: {}".format(name, e))
+                return False
+
+            if not new.enabled:
+                status.loaded = False
+                status.running = False
+                status.error = "disabled"
+                return False
+
+            if not new.load_ebpf_program():
+                status.error = "reload load failed"
+                status.loaded = False
+                return False
+
+            self.output_controller.register_monitor(name, new)
+
+            if not new.run():
+                status.error = "reload run failed"
+                status.loaded = True
+                status.running = False
+                try:
+                    new.cleanup()
+                except Exception:
+                    pass
+                return False
+
+            self.monitors[name] = new
+            status.loaded = True
+            status.running = True
+            status.error = None
+            status.last_update = now
+            status.restart_count += 1
+            status.restart_timestamps.append(now)
+            status.degraded = False
+            status.last_error_count_snapshot = getattr(new, "collect_error_count", 0)
+            self.logger.info(
+                "monitor_restart name=%s reason=%s count=%s",
+                name, reason, status.restart_count,
+            )
+            return True
+
+    def get_health(self):
+        # type: () -> Dict[str, Any]
+        """进程级 + 各监控器健康快照（JSON 可序列化）。"""
+        monitors = {}
+        with self.state_lock:
+            for name, mon in self.monitors.items():
+                try:
+                    h = mon.get_health()
+                except Exception as e:
+                    h = {"type": name, "error": str(e)}
+                st = self.monitor_status.get(name)
+                if st is not None:
+                    h["status_error"] = st.error
+                    h["restart_count"] = st.restart_count
+                    h["degraded"] = st.degraded
+                monitors[name] = h
+            running = self.running
+        return {
+            "running": running,
+            "watchdog_enabled": self.watchdog_enabled,
+            "monitors": monitors,
+            "start_time": self.stats.get("start_time"),
+        }
+
+    def _start_watchdog(self):
+        # type: () -> None
+        if not self.watchdog_enabled:
+            return
+        self._watchdog_stop.clear()
+        self._watchdog_thread = threading.Thread(target=self._watchdog_loop)
+        self._watchdog_thread.daemon = True
+        self._watchdog_thread.start()
+
+    def _stop_watchdog(self):
+        # type: () -> None
+        self._watchdog_stop.set()
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            self._watchdog_thread.join(timeout=5)
+        self._watchdog_thread = None
+
+    def _watchdog_loop(self):
+        # type: () -> None
+        while not self._watchdog_stop.wait(self.watchdog_interval):
+            try:
+                self._watchdog_tick()
+                self._maybe_log_health()
+            except Exception as e:
+                self.logger.error("watchdog tick failed: {}".format(e))
+
+    def _maybe_log_health(self):
+        # type: () -> None
+        """设计 §9.2：每 60s 限速 logger.info 一行 JSON 健康快照。"""
+        now = time.time()
+        if now - self._last_health_log_ts < self._health_log_interval_s:
+            return
+        self._last_health_log_ts = now
+        try:
+            import json
+            health = self.get_health()
+            self.logger.info("health_snapshot %s", json.dumps(health, default=str))
+        except Exception as e:
+            try:
+                # fallback key=value summary without json
+                h = self.get_health()
+                parts = ["running={}".format(h.get("running"))]
+                for name, mh in (h.get("monitors") or {}).items():
+                    parts.append(
+                        "{}:running={}:errs={}:alive={}".format(
+                            name,
+                            mh.get("running"),
+                            mh.get("collect_error_count"),
+                            mh.get("thread_alive"),
+                        )
+                    )
+                self.logger.info("health_snapshot %s", " ".join(parts))
+            except Exception as e2:
+                self.logger.warning("health log failed: {} / {}".format(e, e2))
+
+    def _watchdog_tick(self):
+        # type: () -> None
+        """双条件 watchdog：死线程 / stale success / error delta。"""
+        now = time.time()
+        with self.state_lock:
+            names = list(self.monitors.keys())
+        for name in names:
+            with self.state_lock:
+                mon = self.monitors.get(name)
+                status = self.monitor_status.get(name)
+            if mon is None or status is None:
+                continue
+            if not status.running:
+                continue
+            if status.degraded:
+                continue
+
+            reason = None
+            # 1) dead thread
+            if not mon.is_thread_alive():
+                reason = "dead_thread"
+            else:
+                # 2) stale last_success
+                interval = float(getattr(mon, "interval", 2) or 2)
+                stale_limit = interval * self.watchdog_stale_intervals
+                last_ok = float(getattr(mon, "last_success_ts", 0) or 0)
+                started = float(self.stats.get("start_time") or now)
+                if last_ok > 0 and (now - last_ok) > stale_limit:
+                    reason = "stale_success"
+                elif last_ok == 0 and (now - started) > stale_limit:
+                    reason = "no_success_yet"
+                # 3) error delta
+                err = int(getattr(mon, "collect_error_count", 0) or 0)
+                delta = err - int(status.last_error_count_snapshot or 0)
+                status.last_error_count_snapshot = err
+                if reason is None and delta >= self.watchdog_error_delta:
+                    reason = "error_delta"
+
+            if reason:
+                self.logger.warning(
+                    "watchdog trigger name=%s reason=%s", name, reason
+                )
+                self.restart_monitor(name, reason=reason)
