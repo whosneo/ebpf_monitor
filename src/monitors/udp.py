@@ -124,6 +124,8 @@ class UdpMonitor(BaseMonitor):
         self.target_processes = list(config.get("target_processes") or [])
         self.min_packet_size = int(config.get("min_packet_size") or 0)
         self._ptm = ProcessTargetManager(self.target_processes, self.logger)
+        # 与 PTM 一致：截断后无真实名则不启用内核过滤
+        self._pid_filter_enabled = bool(self._ptm.targets_nonempty)
         if self.target_ports:
             self.logger.warning(
                 "udp: target_ports is configured but unsupported "
@@ -132,7 +134,7 @@ class UdpMonitor(BaseMonitor):
 
     def _pid_filter_targets_nonempty(self):
         # type: () -> bool
-        return bool(self.target_processes)
+        return bool(getattr(self, "_pid_filter_enabled", False))
 
     def get_extra_cflags(self):
         # type: () -> List[str]

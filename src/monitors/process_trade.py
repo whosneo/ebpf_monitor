@@ -172,11 +172,13 @@ class ProcessTradeMonitor(BaseMonitor):
             if t and t not in names:
                 names.append(t)
         self._ptm = ProcessTargetManager(names, self.logger)
+        # cflag 与 sync 共用：仅当截断后仍有真实进程名时启用内核白名单
         self._pid_filter_enabled = bool(names)
 
     def _pid_filter_targets_nonempty(self):
         # type: () -> bool
-        return bool(self.zmb_processes or self.zme_processes)
+        """与 _pid_filter_enabled 一致（截断后非空），禁止空串/空白启用空白名单。"""
+        return bool(getattr(self, "_pid_filter_enabled", False))
 
     def get_extra_cflags(self):
         # type: () -> List[str]

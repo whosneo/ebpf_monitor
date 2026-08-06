@@ -167,6 +167,25 @@ def test_extra_cflags_empty_targets(monitor_context, pt_config):
     assert m.get_extra_cflags() == []
 
 
+def test_extra_cflags_whitespace_only_names_no_filter(monitor_context, pt_config):
+    """AC3: empty/whitespace names must not enable empty kernel whitelist."""
+    pt_config["zmb_processes"] = ["", "  ", "\t"]
+    pt_config["zme_processes"] = []
+    m = ProcessTradeMonitor(monitor_context, pt_config)
+    assert m._pid_filter_enabled is False
+    assert m._pid_filter_targets_nonempty() is False
+    assert "-DENABLE_PID_FILTER=1" not in m.get_extra_cflags()
+    assert m.get_extra_cflags() == []
+
+
+def test_extra_cflags_real_name_enables_filter(monitor_context, pt_config):
+    pt_config["zmb_processes"] = ["", "zmb"]
+    pt_config["zme_processes"] = ["  "]
+    m = ProcessTradeMonitor(monitor_context, pt_config)
+    assert m._pid_filter_enabled is True
+    assert "-DENABLE_PID_FILTER=1" in m.get_extra_cflags()
+
+
 def test_csv_columns_simple_pairs(monitor_context, pt_config):
     m = ProcessTradeMonitor(monitor_context, pt_config)
     for col in m.CSV_COLUMNS:

@@ -102,6 +102,7 @@ class UfuncMonitor(BaseMonitor):
         self.probe_limit = int(config.get("probe_limit") or 32)
         self.resolve_from_pid = bool(config.get("resolve_from_pid", True))
         self._ptm = ProcessTargetManager(self.target_processes, self.logger)
+        self._pid_filter_enabled = bool(self._ptm.targets_nonempty)
         self._func_id_to_name = {}  # type: Dict[int, str]
         self._attach_specs = []  # type: List[Dict[str, Any]]
         self.attached_count = 0
@@ -144,7 +145,7 @@ class UfuncMonitor(BaseMonitor):
 
     def _pid_filter_targets_nonempty(self):
         # type: () -> bool
-        return bool(self.target_processes)
+        return bool(getattr(self, "_pid_filter_enabled", False))
 
     def get_extra_cflags(self):
         # type: () -> List[str]
