@@ -282,7 +282,23 @@ class BaseMonitor(ABC):
             self.logger.info("[BaseMonitor] {} eBPF程序加载成功".format(self.__class__.__name__))
             return True
         except Exception as e:
-            self.logger.error("[BaseMonitor] {} eBPF程序加载失败: {}".format(self.__class__.__name__, e))
+            err = str(e)
+            self.logger.error(
+                "[BaseMonitor] {} eBPF程序加载失败: {}".format(
+                    self.__class__.__name__, e
+                )
+            )
+            # 常见环境问题提示，便于区分代码 bug 与缺头文件/权限
+            if "Failed to compile" in err or "Unable to find kernel headers" in err:
+                self.logger.error(
+                    "[BaseMonitor] 可能原因: 缺少匹配运行内核的头文件 "
+                    "(/lib/modules/$(uname -r)/build)。"
+                    "安装 linux-headers-$(uname -r) 后重试。"
+                )
+            elif "Operation not permitted" in err or "Permission denied" in err:
+                self.logger.error(
+                    "[BaseMonitor] 可能原因: 需要 root 或 CAP_BPF/CAP_SYS_ADMIN 权限。"
+                )
             return False
 
     def get_ebpf_code(self):
@@ -378,11 +394,17 @@ class BaseMonitor(ABC):
         
         子类可以重写此方法以自定义事件轮询逻辑。
         默认实现调用 _poll_events() 方法。
+
+        成功 poll（含 0 事件）会更新 last_success_ts，避免 watchdog
+        因 EVENT 模式从不走统计 pop 路径而触发 no_success_yet 重启。
         """
         while not self.stop_event.is_set():
             try:
                 self._poll_events()
+                # poll 正常返回即视为健康（无事件也算成功）
+                self.last_success_ts = time.time()
             except Exception as e:
+                self.collect_error_count += 1
                 self.logger.error("[BaseMonitor] 处理事件失败: {}".format(e))
                 # 短暂休眠后重试，避免错误循环消耗CPU
                 if not self.stop_event.is_set():

@@ -205,6 +205,42 @@ class CapabilityChecker:
                 self.logger.warning("bpftool检查异常: {}".format(e))
             return False
 
+    def check_kernel_headers(self):
+        # type: () -> bool
+        """
+        检查 BCC 编译 eBPF 所需的内核头文件是否可用。
+
+        BCC 需要 /lib/modules/$(uname -r)/build 指向有效的头文件树，
+        缺失时所有监控器会以 "Failed to compile BPF module" 失败。
+
+        Returns:
+            bool: 内核头文件是否可用
+        """
+        release = self.kernel_release
+        build_link = "/lib/modules/{}/build".format(release)
+        if not os.path.exists(build_link):
+            self.logger.error(
+                "内核头文件不可用: {} 不存在。"
+                "请安装 linux-headers-{}（或启用 CONFIG_IKHEADERS）。"
+                "BCC 编译 eBPF 需要该路径。".format(build_link, release)
+            )
+            return False
+        # 常见 include 根：相对 build 链接或 common headers
+        include_candidates = [
+            os.path.join(build_link, "include"),
+            os.path.join(os.path.dirname(os.path.realpath(build_link)),
+                         "include"),
+        ]
+        for inc in include_candidates:
+            if os.path.isdir(inc):
+                self.logger.debug("内核头文件检查通过: {}".format(inc))
+                return True
+        self.logger.error(
+            "内核头文件路径存在但缺少 include 目录: {}。"
+            "请安装匹配运行内核的 linux-headers 包。".format(build_link)
+        )
+        return False
+
     @staticmethod
     def check_root_privileges():
         # type: () -> bool
@@ -371,6 +407,15 @@ class CapabilityChecker:
         # 检查eBPF支持
         if not self.check_ebpf_support():
             self.logger.error("系统不支持eBPF功能")
+            return False
+
+        # BCC 编译需要内核头文件；缺失时给出明确诊断（而非含糊的 compile 失败）
+        if not self.check_kernel_headers():
+            self.logger.error(
+                "内核开发头文件缺失，无法编译/加载 eBPF 程序。"
+                "安装: apt install linux-headers-$(uname -r) "
+                "（或发行版等价包）"
+            )
             return False
 
         self.logger.info("环境兼容性验证通过")

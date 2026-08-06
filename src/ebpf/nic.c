@@ -135,8 +135,10 @@ int kprobe__dev_hard_start_xmit(struct pt_regs *ctx) {
     return 0;
 }
 
-/* 可选补充：dev_queue_xmit 入口（队列深度相关） */
-int kprobe__dev_queue_xmit(struct pt_regs *ctx) {
+/* 可选补充：__dev_queue_xmit 入口（队列深度相关）
+ * 现代内核导出符号为 __dev_queue_xmit，裸名 dev_queue_xmit 常不可 trace。
+ */
+int kprobe____dev_queue_xmit(struct pt_regs *ctx) {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     if (!skb) return 0;
 
@@ -178,11 +180,10 @@ int kprobe__netif_rx(struct pt_regs *ctx) {
     return 0;
 }
 
-/* 额外：napi_poll 相关（如果符号可用，占位增强队列深度） */
-int kprobe__napi_poll(struct pt_regs *ctx) {
+/* 额外：__napi_poll（内核导出名为 __napi_poll，裸名 napi_poll 常不可 trace） */
+int kprobe____napi_poll(struct pt_regs *ctx) {
     /* 占位：未来 driver specific 或 napi 内部队列深度探针
      * SWIFT-2200N: 查找驱动中 napi 或 ring poll 函数名后添加
-     * 例如：kprobe__xxx_nic_poll 或 ring 管理函数
      */
     char comm[TASK_COMM_LEN] = {};
     bpf_get_current_comm(&comm, sizeof(comm));

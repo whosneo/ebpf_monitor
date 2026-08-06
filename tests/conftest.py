@@ -97,6 +97,12 @@ class MockBPF:
     def attach_kprobe(self, *a, **k):
         self._kprobes.append((a, k))
 
+    def attach_kretprobe(self, *a, **k):
+        # 与 attach_kprobe 同结构，供 shm 等多符号回退路径使用
+        if not hasattr(self, "_kretprobes"):
+            self._kretprobes = []
+        self._kretprobes.append((a, k))
+
     def attach_tracepoint(self, *a, **k):
         self._tracepoints.append((a, k))
 

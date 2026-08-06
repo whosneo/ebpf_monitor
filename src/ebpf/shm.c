@@ -136,13 +136,34 @@ static inline void update_shm_segment(u32 shmid, int op_type, int ret) {
     }
 }
 
-/* ==================== Kprobe处理函数 ==================== */
-
-/* Kprobe: shmget - 创建/获取共享内存段
- * 参数: (int shmflg, size_t size, int shmflg)
- * 返回: shmid (成功) 或 <0 (失败)
+/* ==================== Kprobe处理函数 ====================
+ *
+ * 不使用 BCC 自动附加名 kprobe__/kretprobe__：
+ * 现代内核无裸名 shmget/shmat/...，需由 Python 侧多符号回退附加
+ * （ksys_shmget / do_shmat / __x64_sys_* 等）。
+ *
+ * 参数读取约定：
+ * - shmget/shmdt 入口不依赖寄存器参数
+ * - shmat 优先挂 do_shmat（直接参数 ABI）
+ * - shmctl 常仅有 __x64_sys_shmctl（4.17+ 包装器，嵌套 pt_regs）
  */
-int kprobe__shmget(struct pt_regs *ctx) {
+
+/* 从 4.17+ 系统调用包装器中读取第 1 个用户参数 */
+static inline int shm_sys_arg1(struct pt_regs *ctx) {
+#ifdef KERNEL_VERSION_4_17_PLUS
+    struct pt_regs *real_regs = (struct pt_regs *)PT_REGS_PARM1(ctx);
+    unsigned long arg1 = 0;
+    if (real_regs) {
+        bpf_probe_read(&arg1, sizeof(arg1), &real_regs->di);
+    }
+    return (int)arg1;
+#else
+    return (int)PT_REGS_PARM1(ctx);
+#endif
+}
+
+/* Kprobe: shmget - 创建/获取共享内存段 */
+int trace_shmget_entry(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -162,7 +183,7 @@ int kprobe__shmget(struct pt_regs *ctx) {
 }
 
 /* Kretprobe: shmget返回 - 获取shmid */
-int kretprobe__shmget(struct pt_regs *ctx) {
+int trace_shmget_return(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -194,10 +215,9 @@ int kretprobe__shmget(struct pt_regs *ctx) {
 }
 
 /* Kprobe: shmat - 附加到进程地址空间
- * 参数: (int shmid, const void __user *shmaddr, int shmflg)
- * 返回: attach地址 (成功) 或 <0 (失败)
+ * 优先挂 do_shmat：参数 (int shmid, ...) 直接在寄存器中
  */
-int kprobe__shmat(struct pt_regs *ctx) {
+int trace_shmat_entry(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -218,7 +238,7 @@ int kprobe__shmat(struct pt_regs *ctx) {
 }
 
 /* Kretprobe: shmat返回 */
-int kretprobe__shmat(struct pt_regs *ctx) {
+int trace_shmat_return(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -241,11 +261,8 @@ int kretprobe__shmat(struct pt_regs *ctx) {
     return 0;
 }
 
-/* Kprobe: shmdt - 从进程分离
- * 参数: (const void __user *shmaddr)
- * 返回: 0 (成功) 或 <0 (失败)
- */
-int kprobe__shmdt(struct pt_regs *ctx) {
+/* Kprobe: shmdt - 从进程分离 */
+int trace_shmdt_entry(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -265,7 +282,7 @@ int kprobe__shmdt(struct pt_regs *ctx) {
 }
 
 /* Kretprobe: shmdt返回 */
-int kretprobe__shmdt(struct pt_regs *ctx) {
+int trace_shmdt_return(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -288,17 +305,14 @@ int kretprobe__shmdt(struct pt_regs *ctx) {
     return 0;
 }
 
-/* Kprobe: shmctl - 控制操作
- * 参数: (int cmd, struct shmid_ds __user *buf, int pid)
- * 返回: 0 (成功) 或 <0 (失败)
- */
-int kprobe__shmctl(struct pt_regs *ctx) {
+/* Kprobe: shmctl - 控制操作（优先 __x64_sys_shmctl 包装器 ABI） */
+int trace_shmctl_entry(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
     if (pid == 0) return 0;
 
-    int shmid = (int)PT_REGS_PARM1(ctx);
+    int shmid = shm_sys_arg1(ctx);
 
     struct shm_start_info_t info = {};
     info.start_ts = bpf_ktime_get_ns();
@@ -313,7 +327,7 @@ int kprobe__shmctl(struct pt_regs *ctx) {
 }
 
 /* Kretprobe: shmctl返回 */
-int kretprobe__shmctl(struct pt_regs *ctx) {
+int trace_shmctl_return(struct pt_regs *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 

@@ -132,5 +132,7 @@ class ExecMonitor(BaseMonitor):
             self.output_controller.handle_data(self.type, dict(
                 {"timestamp": time.time()},
                 **event_data))
+            self.last_success_ts = time.time()
         except Exception as e:
+            self.collect_error_count += 1
             self.logger.error("处理事件失败: {}".format(e))

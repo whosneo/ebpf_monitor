@@ -30,6 +30,8 @@
 #include <linux/sched.h>
 #include <net/sock.h>
 #include <net/inet_sock.h>
+#include <linux/ip.h>
+#include <linux/udp.h>
 
 /* 方向常量 */
 #define DIR_SEND 1

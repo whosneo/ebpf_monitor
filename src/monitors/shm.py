@@ -139,6 +139,73 @@ class ShmMonitor(BaseMonitor):
         self.monitor_barriers = config.get("monitor_barriers", False)
         self._ptm = ProcessTargetManager(self.target_processes, self.logger)
 
+    def _configure_ebpf_program(self):
+        # type: () -> None
+        """多符号回退附加 SHM kprobe/kretprobe（兼容 3.10 与 4.17+ 内核）。
+
+        不依赖 BCC 自动 kprobe__* 名（现代内核无裸名 shmat 等）。
+        """
+        # (fn_name, is_retprobe, symbol_candidates)
+        # shmat 优先 do_shmat：直接参数 ABI，避免 __x64_sys_* 嵌套 pt_regs
+        # shmctl 优先 __x64_sys_shmctl：C 侧使用包装器参数读取
+        probe_specs = [
+            ("trace_shmget_entry", False,
+             ["ksys_shmget", "__x64_sys_shmget", "sys_shmget"]),
+            ("trace_shmget_return", True,
+             ["ksys_shmget", "__x64_sys_shmget", "sys_shmget"]),
+            ("trace_shmat_entry", False,
+             ["do_shmat", "__x64_sys_shmat", "sys_shmat"]),
+            ("trace_shmat_return", True,
+             ["do_shmat", "__x64_sys_shmat", "sys_shmat"]),
+            ("trace_shmdt_entry", False,
+             ["ksys_shmdt", "__x64_sys_shmdt", "sys_shmdt"]),
+            ("trace_shmdt_return", True,
+             ["ksys_shmdt", "__x64_sys_shmdt", "sys_shmdt"]),
+            ("trace_shmctl_entry", False,
+             ["__x64_sys_shmctl", "sys_shmctl"]),
+            ("trace_shmctl_return", True,
+             ["__x64_sys_shmctl", "sys_shmctl"]),
+        ]
+
+        attached = 0
+        for fn_name, is_ret, symbols in probe_specs:
+            last_error = None
+            ok = False
+            for symbol in symbols:
+                try:
+                    if is_ret:
+                        self.bpf.attach_kretprobe(event=symbol, fn_name=fn_name)
+                    else:
+                        self.bpf.attach_kprobe(event=symbol, fn_name=fn_name)
+                    self.logger.info(
+                        "shm: 成功附加 {} 到 {}".format(
+                            "kretprobe" if is_ret else "kprobe", symbol
+                        )
+                    )
+                    attached += 1
+                    ok = True
+                    break
+                except Exception as e:
+                    last_error = e
+                    self.logger.debug(
+                        "shm: 无法附加 {} 到 {}，跳过: {}".format(
+                            fn_name, symbol, e
+                        )
+                    )
+            if not ok:
+                self.logger.warning(
+                    "shm: 探针 {} 全部符号失败，最后错误: {}".format(
+                        fn_name, last_error
+                    )
+                )
+
+        if attached == 0:
+            raise RuntimeError(
+                "Failed to attach any shm kprobe/kretprobe; "
+                "no SHM symbols available on this kernel"
+            )
+        self.logger.info("shm: 成功附加 {} 个探针".format(attached))
+
     def should_collect(self, key, value):
         # type: (Any, Any) -> bool
         """判断是否应该收集数据"""
