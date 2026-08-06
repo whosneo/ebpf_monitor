@@ -189,6 +189,96 @@ def test_restart_backoff_degraded():
     assert mon.monitor_status["stab_dummy"].degraded is True
 
 
+def _make_restart_harness(old, factory_side_effect):
+    """Minimal eBPFMonitor shell for restart_monitor tests."""
+    context = MagicMock()
+    logger = MagicMock()
+    context.get_logger.return_value = logger
+    context.output_controller = MagicMock()
+    context.config_manager.get_monitors_config.return_value = MagicMock(
+        stab_dummy={"enabled": True, "interval": 1.0}
+    )
+    factory = MagicMock()
+    factory.create_monitor.side_effect = factory_side_effect
+    context.get_monitor_factory.return_value = factory
+
+    mon = eBPFMonitor.__new__(eBPFMonitor)
+    mon.context = context
+    mon.logger = logger
+    mon.output_controller = context.output_controller
+    mon.monitors_config = context.config_manager.get_monitors_config()
+    mon.all_monitors = {"stab_dummy": StabDummy}
+    mon.monitors = {"stab_dummy": old} if old is not None else {}
+    mon.monitor_status = {
+        "stab_dummy": MonitorStatus("stab_dummy", loaded=True, running=True)
+    }
+    mon.state_lock = __import__("threading").RLock()
+    mon.watchdog_max_restarts_per_window = 3
+    mon.watchdog_restart_window_s = 60
+    return mon, factory, context
+
+
+def test_restart_load_failure_keeps_old_instance():
+    """AC1: load fail after restart must not drop the monitor key / old instance."""
+    old = MagicMock()
+    old.is_running.return_value = True
+    failed = MagicMock()
+    failed.enabled = True
+    failed.load_ebpf_program.return_value = False
+
+    mon, factory, context = _make_restart_harness(old, lambda *a, **k: failed)
+    ok = mon.restart_monitor("stab_dummy", reason="load_fail")
+    assert ok is False
+    # Old instance still in map — coverage not lost
+    assert "stab_dummy" in mon.monitors
+    assert mon.monitors["stab_dummy"] is old
+    # Old was not torn down (create-new-first path)
+    old.stop.assert_not_called()
+    old.cleanup.assert_not_called()
+    failed.cleanup.assert_called()
+    assert mon.monitor_status["stab_dummy"].error == "reload load failed"
+    # Not "running with no instance"
+    assert mon.monitors["stab_dummy"] is not None
+
+
+def test_restart_create_failure_keeps_old_instance():
+    """AC1: factory create exception leaves previous monitor in place."""
+    old = MagicMock()
+    old.is_running.return_value = True
+
+    def boom(*a, **k):
+        raise RuntimeError("factory down")
+
+    mon, factory, context = _make_restart_harness(old, boom)
+    ok = mon.restart_monitor("stab_dummy", reason="create_fail")
+    assert ok is False
+    assert mon.monitors["stab_dummy"] is old
+    old.stop.assert_not_called()
+    assert "create failed" in (mon.monitor_status["stab_dummy"].error or "")
+
+
+def test_restart_run_failure_keeps_new_instance_in_map():
+    """AC1: run fail still leaves a monitor entry (new instance, not running)."""
+    old = MagicMock()
+    old.is_running.return_value = True
+    new = MagicMock()
+    new.enabled = True
+    new.load_ebpf_program.return_value = True
+    new.run.return_value = False
+    new.collect_error_count = 0
+
+    mon, factory, context = _make_restart_harness(old, lambda *a, **k: new)
+    ok = mon.restart_monitor("stab_dummy", reason="run_fail")
+    assert ok is False
+    assert "stab_dummy" in mon.monitors
+    assert mon.monitors["stab_dummy"] is new
+    assert mon.monitor_status["stab_dummy"].running is False
+    assert mon.monitor_status["stab_dummy"].loaded is True
+    assert mon.monitor_status["stab_dummy"].error == "reload run failed"
+    old.stop.assert_called()
+    old.cleanup.assert_called()
+
+
 def test_watchdog_triggers_on_dead_thread():
     mon = eBPFMonitor.__new__(eBPFMonitor)
     mon.logger = MagicMock()
@@ -218,6 +308,8 @@ def test_watchdog_triggers_on_dead_thread():
     mon.restart_monitor = fake_restart
     mon._watchdog_tick()
     assert called and called[0][1] == "dead_thread"
+
+
 
 
 def test_get_health_structure():

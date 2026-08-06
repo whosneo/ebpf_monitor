@@ -333,6 +333,10 @@ class eBPFMonitor:
         # type: (str, str) -> bool
         """
         单监控器重启：永远经 Factory 新建实例（禁止复用 cleanup 后实例）。
+
+        顺序：先 create+load 新实例；成功后再 stop/cleanup 旧实例并替换。
+        create/load 失败时保留旧实例在 self.monitors（不丢覆盖）。
+        run 失败时已换上新实例并保留 key，status.running=False。
         """
         with self.state_lock:
             if name not in self.all_monitors:
@@ -359,26 +363,12 @@ class eBPFMonitor:
                 return False
 
             old = self.monitors.get(name)
-            if old is not None:
-                try:
-                    if old.is_running():
-                        old.stop()
-                except Exception as e:
-                    self.logger.error("restart stop {}: {}".format(name, e))
-                try:
-                    self.output_controller.unregister_monitor(name)
-                except Exception:
-                    pass
-                try:
-                    old.cleanup()
-                except Exception as e:
-                    self.logger.error("restart cleanup {}: {}".format(name, e))
-                self.monitors.pop(name, None)
 
             try:
                 cfg = getattr(self.monitors_config, name)
             except AttributeError:
                 status.error = "config missing"
+                # 不改 self.monitors：旧实例仍在
                 return False
 
             factory = self.context.get_monitor_factory()
@@ -387,9 +377,14 @@ class eBPFMonitor:
             except Exception as e:
                 status.error = "create failed: {}".format(e)
                 self.logger.error("restart create {}: {}".format(name, e))
+                # 旧实例仍在 map 中
                 return False
 
             if not new.enabled:
+                # 配置变为禁用：停掉旧实例并移除
+                if old is not None:
+                    self._teardown_monitor_instance(name, old)
+                    self.monitors.pop(name, None)
                 status.loaded = False
                 status.running = False
                 status.error = "disabled"
@@ -397,22 +392,35 @@ class eBPFMonitor:
 
             if not new.load_ebpf_program():
                 status.error = "reload load failed"
-                status.loaded = False
+                # 不替换：清理失败的新实例，旧实例继续服务
+                try:
+                    new.cleanup()
+                except Exception:
+                    pass
+                self.logger.error("restart load failed name=%s; keeping previous instance", name)
                 return False
 
-            self.output_controller.register_monitor(name, new)
+            # 新实例已 load 成功（含 soft-wait bpf=None）→ 替换旧实例
+            if old is not None:
+                self._teardown_monitor_instance(name, old)
+
+            self.monitors[name] = new
+            try:
+                self.output_controller.register_monitor(name, new)
+            except Exception as e:
+                self.logger.error("restart register {}: {}".format(name, e))
 
             if not new.run():
                 status.error = "reload run failed"
                 status.loaded = True
                 status.running = False
-                try:
-                    new.cleanup()
-                except Exception:
-                    pass
+                # 新实例保留在 map 中，避免 key 丢失；status 与实例一致
+                self.logger.error(
+                    "restart run failed name=%s; new instance kept (not running)",
+                    name,
+                )
                 return False
 
-            self.monitors[name] = new
             status.loaded = True
             status.running = True
             status.error = None
@@ -426,6 +434,23 @@ class eBPFMonitor:
                 name, reason, status.restart_count,
             )
             return True
+
+    def _teardown_monitor_instance(self, name, instance):
+        # type: (str, BaseMonitor) -> None
+        """Stop, unregister, and cleanup a monitor instance (best-effort)."""
+        try:
+            if instance.is_running():
+                instance.stop()
+        except Exception as e:
+            self.logger.error("restart stop {}: {}".format(name, e))
+        try:
+            self.output_controller.unregister_monitor(name)
+        except Exception:
+            pass
+        try:
+            instance.cleanup()
+        except Exception as e:
+            self.logger.error("restart cleanup {}: {}".format(name, e))
 
     def get_health(self):
         # type: () -> Dict[str, Any]
