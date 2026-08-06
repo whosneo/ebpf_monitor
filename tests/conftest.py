@@ -4,7 +4,7 @@
 Pytest fixtures for eBPF monitor tests.
 
 Provides:
-- Mocked bcc.BPF
+- Mocked bcc.BPF with kprobe/tracepoint/uprobe attach
 - MonitorContext mock
 - ApplicationContext mock
 - Sample configs
@@ -25,44 +25,119 @@ except ImportError:
             return deco
     pytest = _DummyPytest()
 
+
+class MockTable(object):
+    """Simple dict-backed BPF table mock supporting keys/pop/update/delete."""
+
+    def __init__(self):
+        self._data = {}
+
+    def keys(self):
+        return list(self._data.keys())
+
+    def pop(self, key):
+        if key not in self._data:
+            raise KeyError(key)
+        return self._data.pop(key)
+
+    def update(self, key, val):
+        self._data[key] = val
+
+    def __setitem__(self, key, val):
+        self._data[key] = val
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __delitem__(self, key):
+        del self._data[key]
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def delete(self, key):
+        if key in self._data:
+            del self._data[key]
+
+    def clear(self):
+        self._data.clear()
+
+    def items(self):
+        return list(self._data.items())
+
+
 # Mock bcc before any real imports that pull it
 class MockBPF:
+    last_cflags = None  # type: ignore
+    last_text = None  # type: ignore
+    instances = []  # type: ignore
+
     def __init__(self, *args, **kwargs):
         self._tables = {}
         self._kprobes = []
         self._tracepoints = []
+        self._uprobes = []
+        self._uretprobes = []
+        self.cflags = kwargs.get("cflags", [])
+        self.text = kwargs.get("text", args[0] if args else None)
+        if "text" in kwargs:
+            self.text = kwargs["text"]
+        MockBPF.last_cflags = list(self.cflags) if self.cflags is not None else []
+        MockBPF.last_text = self.text
+        MockBPF.instances.append(self)
 
     def get_table(self, name):
         if name not in self._tables:
-            # return a mock table supporting pop/keys
-            tbl = MagicMock()
-            tbl.keys.return_value = []
-            tbl.pop.side_effect = KeyError
-            self._tables[name] = tbl
+            self._tables[name] = MockTable()
         return self._tables[name]
 
     def cleanup(self):
         pass
 
-    # Simulate attach
-    def attach_kprobe(self, *a, **k): self._kprobes.append((a, k))
-    def attach_tracepoint(self, *a, **k): self._tracepoints.append((a, k))
+    def attach_kprobe(self, *a, **k):
+        self._kprobes.append((a, k))
+
+    def attach_tracepoint(self, *a, **k):
+        self._tracepoints.append((a, k))
+
+    def attach_uprobe(self, *a, **k):
+        self._uprobes.append((a, k))
+
+    def attach_uretprobe(self, *a, **k):
+        self._uretprobes.append((a, k))
 
 
-# Inject mock bcc into sys.modules before src imports
-mock_bcc = types.ModuleType("bcc")
-mock_bcc.BPF = MockBPF
-sys.modules["bcc"] = mock_bcc
+# Inject mock bcc into sys.modules before src imports.
+# Guard against double-load (pytest loads as "conftest"; tests may also
+# "import tests.conftest") so BaseMonitor's `from bcc import BPF` stays
+# bound to the same MockBPF class that tests assert against.
+def _install_bcc_mock():
+    existing = sys.modules.get("bcc")
+    if existing is not None and getattr(existing, "BPF", None) is not None:
+        # Reuse already-installed mock class
+        return getattr(existing, "BPF")
+    mock_bcc = types.ModuleType("bcc")
+    mock_bcc.BPF = MockBPF
+    sys.modules["bcc"] = mock_bcc
+    mock_bpfcc = types.ModuleType("bpfcc")
+    mock_bpfcc.BPF = MockBPF
+    sys.modules["bpfcc"] = mock_bpfcc
+    return MockBPF
 
-# Also support bpfcc alias if used
-mock_bpfcc = types.ModuleType("bpfcc")
-mock_bpfcc.BPF = MockBPF
-sys.modules["bpfcc"] = mock_bpfcc
+
+_ActiveMockBPF = _install_bcc_mock()
+# Alias for tests that import MockBPF from this module after double-load
+if _ActiveMockBPF is not MockBPF:
+    # Prefer the first-installed class for class-level last_cflags/instances
+    MockBPF = _ActiveMockBPF  # noqa: F811
 
 
 @pytest.fixture
 def mock_bpf():
     """Provide a fresh MockBPF instance."""
+    MockBPF.instances = []
+    MockBPF.last_cflags = None
+    MockBPF.last_text = None
     return MockBPF()
 
 

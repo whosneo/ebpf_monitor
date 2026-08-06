@@ -80,6 +80,10 @@ class BaseMonitor(ABC):
     # 声明式配置验证模式，子类可以重写
     CONFIG_SCHEMA = {}  # type: Dict[str, Dict[str, Any]]
 
+    # 多表收集：[(map_name, record_type), ...]；None 表示使用默认单表 stats_name
+    # 运行时可被实例 __dict__ 覆盖（见 _iter_stats_tables）
+    STATS_TABLES = None  # type: Any
+
     MONITOR_THREAD_TIMEOUT = 5.0
 
     @classmethod
@@ -173,6 +177,12 @@ class BaseMonitor(ABC):
         # noinspection PyTypeChecker
         self.monitor_thread = None  # type: Thread
 
+        # 自健康字段（Phase 4）
+        self.last_success_ts = 0.0  # type: float
+        self.collect_error_count = 0  # type: int
+        self.map_lookup_fail_count = 0  # type: int
+        self._cleaned_up = False  # type: bool
+
         # 验证内核要求和依赖
         self._validate_requirements()
 
@@ -234,6 +244,15 @@ class BaseMonitor(ABC):
         """
         pass
 
+    def get_extra_cflags(self):
+        # type: () -> List[str]
+        """
+        每监控器附加 cflags（D23）。
+
+        子类可覆盖；默认空。不得修改 self.compile_flags 本身。
+        """
+        return []
+
     def load_ebpf_program(self):
         # type: () -> bool
         """
@@ -249,11 +268,14 @@ class BaseMonitor(ABC):
             return False
 
         try:
-            # 使用传入的编译标志
-            self.logger.debug("[BaseMonitor] 加载eBPF程序: {}, 编译标志: {}".format(self.ebpf_file, self.compile_flags))
+            # 新 list：共享 compile_flags + 每监控器 extra（禁止原地 append 共享 list）
+            cflags = list(self.compile_flags or []) + list(self.get_extra_cflags() or [])
+            self.logger.debug(
+                "[BaseMonitor] 加载eBPF程序: {}, 编译标志: {}".format(self.ebpf_file, cflags)
+            )
 
             # 编译和加载eBPF程序
-            self.bpf = BPF(text=self.get_ebpf_code(), cflags=self.compile_flags)
+            self.bpf = BPF(text=self.get_ebpf_code(), cflags=cflags)
             # 配置程序
             self._configure_ebpf_program()
 
@@ -327,6 +349,16 @@ class BaseMonitor(ABC):
             # 统计聚合模式：定时收集
             self._statistical_monitor_loop()
 
+    def _on_collect_tick(self):
+        # type: () -> None
+        """
+        每个统计周期在 pop 前调用。
+
+        子类可覆盖：pid_allow 刷新、ufunc soft-wait 重试 attach 等。
+        默认 no-op。
+        """
+        pass
+
     def _statistical_monitor_loop(self):
         """统计聚合模式监控循环"""
         while not self.stop_event.is_set():
@@ -335,8 +367,10 @@ class BaseMonitor(ABC):
                 break  # 收到停止信号
 
             try:
+                self._on_collect_tick()
                 self._collect_and_output()
             except Exception as e:
+                self.collect_error_count += 1
                 self.logger.error("[BaseMonitor] 收集统计数据失败: {}".format(e))
 
     def _event_monitor_loop(self):
@@ -378,43 +412,75 @@ class BaseMonitor(ABC):
         self.running = False
         self.logger.info("[BaseMonitor] {}监控器已停止".format(self.__class__.__name__))
 
+    def _iter_stats_tables(self):
+        """
+        解析 STATS_TABLES（D24）。
+
+        顺序：
+        1) 实例 __dict__ 中 STATS_TABLES 非 None
+        2) 类属性 STATS_TABLES 非 None
+        3) 默认 [(self.stats_name, "default")]
+        """
+        if "STATS_TABLES" in self.__dict__ and self.__dict__["STATS_TABLES"] is not None:
+            tables = self.__dict__["STATS_TABLES"]
+        elif type(self).STATS_TABLES is not None:
+            tables = type(self).STATS_TABLES
+        else:
+            tables = [(self.stats_name, "default")]
+        for item in tables:
+            yield item
+
+    def _normalize_stat_row(self, stat_data, record_type):
+        # type: (Dict[str, Any], str) -> Dict[str, Any]
+        """默认 no-op。子类可写平字段。record_type 来自 STATS_TABLES 第二元。"""
+        return stat_data
+
     def _collect_and_output(self):
-        """收集并输出统计数据（原子读取并删除）"""
-        try:
-            monitor_stats = self.bpf.get_table(self.stats_name)
-        except Exception as e:
-            self.logger.error("[BaseMonitor] 获取统计信息失败: {}".format(e))
+        """收集并输出统计数据（多表原子 pop + normalize）"""
+        if self.bpf is None:
+            # soft-wait monitors (e.g. ufunc waiting_for_process) may run before attach
             return
 
-        # 收集所有统计数据（使用原子的 pop 操作避免竞态条件）
+        any_success = False
         stats_list = []
 
-        # 先获取所有 key（快照）
-        keys_to_process = list(monitor_stats.keys())
-
-        # 逐个原子地读取并删除
-        for key in keys_to_process:
+        for map_name, record_type in self._iter_stats_tables():
             try:
-                # pop() 是原子操作：读取并删除
-                value = monitor_stats.pop(key)
-                if self.should_collect(key, value):
-                    # Python 2兼容：dict无法使用多个**解包，使用update()代替
-                    stat_data = {"timestamp": time.time()}
-                    stat_data.update(DataProcessor.struct_to_dict(key))
-                    stat_data.update(DataProcessor.struct_to_dict(value))
-                    stats_list.append(stat_data)
-            except KeyError:
-                # key 在获取快照后被删除或不存在，跳过
-                continue
+                monitor_stats = self.bpf.get_table(map_name)
             except Exception as e:
-                self.logger.warning("[BaseMonitor] 处理统计条目失败: {}".format(e))
+                self.map_lookup_fail_count += 1
+                self.collect_error_count += 1
+                self.logger.error(
+                    "[BaseMonitor] 获取统计表 {} 失败: {}".format(map_name, e)
+                )
                 continue
+
+            any_success = True
+            keys_to_process = list(monitor_stats.keys())
+
+            for key in keys_to_process:
+                try:
+                    value = monitor_stats.pop(key)
+                    if self.should_collect(key, value):
+                        stat_data = {"timestamp": time.time()}
+                        stat_data.update(DataProcessor.struct_to_dict(key))
+                        stat_data.update(DataProcessor.struct_to_dict(value))
+                        stat_data = self._normalize_stat_row(stat_data, record_type)
+                        stats_list.append(stat_data)
+                except KeyError:
+                    continue
+                except Exception as e:
+                    self.logger.warning("[BaseMonitor] 处理统计条目失败: {}".format(e))
+                    continue
+
+        # 成功完成 pop 循环（含 0 行）且至少一张表可用 → 更新 last_success
+        if any_success:
+            self.last_success_ts = time.time()
 
         if not stats_list:
-            return  # 没有数据，不输出
+            return
 
         for stat in stats_list:
-            # 通过输出控制器输出
             self.output_controller.handle_data(self.type, stat)
 
     # noinspection PyUnusedLocal
@@ -432,6 +498,27 @@ class BaseMonitor(ABC):
             bool: 是否应该收集数据
         """
         return True
+
+    def is_thread_alive(self):
+        # type: () -> bool
+        """监控线程是否仍存活"""
+        if self.monitor_thread is None:
+            return False
+        return self.monitor_thread.is_alive()
+
+    def get_health(self):
+        # type: () -> Dict[str, Any]
+        """自健康快照（无 Prometheus exporter）"""
+        return {
+            "type": self.type,
+            "enabled": getattr(self, "enabled", False),
+            "running": self.running,
+            "thread_alive": self.is_thread_alive(),
+            "last_success_ts": self.last_success_ts,
+            "collect_error_count": self.collect_error_count,
+            "map_lookup_fail_count": self.map_lookup_fail_count,
+            "cleaned_up": getattr(self, "_cleaned_up", False),
+        }
 
     def cleanup(self):
         """清理资源（幂等操作）"""
@@ -452,7 +539,7 @@ class BaseMonitor(ABC):
             except Exception as e:
                 self.logger.error("[BaseMonitor] {}监控器eBPF资源清理失败: {}".format(self.type, e))
 
-        # 标记已清理
+        # 标记已清理（永久，禁止复用实例 restart）
         self._cleaned_up = True
 
     def is_running(self):
