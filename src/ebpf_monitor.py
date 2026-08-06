@@ -548,9 +548,20 @@ class eBPFMonitor:
                 continue
 
             reason = None
-            # 1) dead thread
+            # soft-wait（ufunc waiting_for_process）：勿因 last_success_ts==0 触发 restart
+            waiting = bool(getattr(mon, "waiting_for_process", False))
+
+            # 1) dead thread (still relevant during soft-wait if thread died)
             if not mon.is_thread_alive():
                 reason = "dead_thread"
+            elif waiting:
+                # intentionally waiting for process/binary — skip stale / no_success_yet
+                # still track error delta if collect path is thrashing
+                err = int(getattr(mon, "collect_error_count", 0) or 0)
+                delta = err - int(status.last_error_count_snapshot or 0)
+                status.last_error_count_snapshot = err
+                if delta >= self.watchdog_error_delta:
+                    reason = "error_delta"
             else:
                 # 2) stale last_success
                 interval = float(getattr(mon, "interval", 2) or 2)

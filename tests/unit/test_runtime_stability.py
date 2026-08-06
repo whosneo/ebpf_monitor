@@ -310,6 +310,62 @@ def test_watchdog_triggers_on_dead_thread():
     assert called and called[0][1] == "dead_thread"
 
 
+def test_watchdog_skips_no_success_yet_when_waiting_for_process():
+    """AC2: soft-wait must not thrash via no_success_yet when last_success_ts==0."""
+    mon = eBPFMonitor.__new__(eBPFMonitor)
+    mon.logger = MagicMock()
+    mon.watchdog_stale_intervals = 5
+    mon.watchdog_error_delta = 50
+    # started long ago so no_success_yet would fire without the soft-wait skip
+    mon.stats = {"start_time": time.time() - 1000}
+    mon.state_lock = __import__("threading").RLock()
+
+    fake = MagicMock()
+    fake.is_thread_alive.return_value = True
+    fake.interval = 2
+    fake.last_success_ts = 0
+    fake.collect_error_count = 0
+    fake.waiting_for_process = True
+
+    mon.monitors = {"ufunc": fake}
+    mon.monitor_status = {"ufunc": MonitorStatus("ufunc", running=True)}
+    mon.monitor_status["ufunc"].last_error_count_snapshot = 0
+
+    called = []
+
+    def fake_restart(name, reason=""):
+        called.append((name, reason))
+        return True
+
+    mon.restart_monitor = fake_restart
+    mon._watchdog_tick()
+    assert called == [], "watchdog must not restart soft-wait monitor for no_success_yet; got {}".format(called)
+
+
+def test_watchdog_still_restarts_dead_thread_during_soft_wait():
+    """Dead thread remains a restart trigger even while waiting_for_process."""
+    mon = eBPFMonitor.__new__(eBPFMonitor)
+    mon.logger = MagicMock()
+    mon.watchdog_stale_intervals = 5
+    mon.watchdog_error_delta = 50
+    mon.stats = {"start_time": time.time() - 1000}
+    mon.state_lock = __import__("threading").RLock()
+
+    fake = MagicMock()
+    fake.is_thread_alive.return_value = False
+    fake.interval = 2
+    fake.last_success_ts = 0
+    fake.collect_error_count = 0
+    fake.waiting_for_process = True
+
+    mon.monitors = {"ufunc": fake}
+    mon.monitor_status = {"ufunc": MonitorStatus("ufunc", running=True)}
+    mon.monitor_status["ufunc"].last_error_count_snapshot = 0
+
+    called = []
+    mon.restart_monitor = lambda name, reason="": called.append((name, reason)) or True
+    mon._watchdog_tick()
+    assert called and called[0][1] == "dead_thread"
 
 
 def test_get_health_structure():
