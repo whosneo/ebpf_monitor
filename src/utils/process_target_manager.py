@@ -152,10 +152,10 @@ class ProcessTargetManager(object):
                 self.logger.error("sync_pid_allow_map get_table({}): {}".format(map_name, e))
             return
 
-        # 1) write new first
+        # 1) 先写入新 PID
         for pid in new_set:
             try:
-                # BCC tables often support __setitem__; also try update
+                # BCC map 通常支持 __setitem__；同时尝试 update
                 key = self._as_key(table, pid)
                 val = self._as_val(table, 1)
                 if hasattr(table, "update"):
@@ -169,7 +169,7 @@ class ProcessTargetManager(object):
                 if self.logger:
                     self.logger.debug("pid_allow update {}: {}".format(pid, e))
 
-        # 2) delete stale
+        # 2) 再删除过期 PID
         try:
             existing = list(table.keys())
         except Exception:
@@ -232,16 +232,16 @@ def sync_pid_allow_write_then_delete(table, new_pids, ops_log=None):
     纯算法辅助：对 mock map 执行写新后删旧，记录操作序。
 
     ops_log 追加 "update:<pid>" / "delete:<pid>"。
-    用于单测验证禁止 clear-first。
+    用于单测验证禁止先清空再写入。
     """
     if ops_log is None:
         ops_log = []
     new_set = set(int(p) for p in new_pids)
-    # write new
+    # 先写新
     for pid in sorted(new_set):
         table[pid] = 1
         ops_log.append("update:{}".format(pid))
-    # delete stale
+    # 再删旧
     for key in list(table.keys()):
         pid = int(key)
         if pid not in new_set:

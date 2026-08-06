@@ -354,8 +354,8 @@ class BaseMonitor(ABC):
         """
         每个统计周期在 pop 前调用。
 
-        子类可覆盖：pid_allow 刷新、ufunc soft-wait 重试 attach 等。
-        默认 no-op。
+        子类可覆盖：pid_allow 刷新、ufunc 软等待时重试 attach 等。
+        默认无操作。
         """
         pass
 
@@ -438,7 +438,7 @@ class BaseMonitor(ABC):
     def _collect_and_output(self):
         """收集并输出统计数据（多表原子 pop + normalize）"""
         if self.bpf is None:
-            # soft-wait monitors (e.g. ufunc waiting_for_process) may run before attach
+            # 软等待监控器（如 ufunc 的 waiting_for_process）可能在 attach 前就进入循环
             return
 
         any_success = False

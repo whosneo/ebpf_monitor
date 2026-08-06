@@ -400,7 +400,7 @@ class eBPFMonitor:
                 self.logger.error("restart load failed name=%s; keeping previous instance", name)
                 return False
 
-            # 新实例已 load 成功（含 soft-wait bpf=None）→ 替换旧实例
+            # 新实例已 load 成功（含软等待时 bpf 仍为 None）→ 替换旧实例
             if old is not None:
                 self._teardown_monitor_instance(name, old)
 
@@ -437,7 +437,7 @@ class eBPFMonitor:
 
     def _teardown_monitor_instance(self, name, instance):
         # type: (str, BaseMonitor) -> None
-        """Stop, unregister, and cleanup a monitor instance (best-effort)."""
+        """停止、注销输出并 cleanup 监控器实例（尽力而为）。"""
         try:
             if instance.is_running():
                 instance.stop()
@@ -548,22 +548,22 @@ class eBPFMonitor:
                 continue
 
             reason = None
-            # soft-wait（ufunc waiting_for_process）：勿因 last_success_ts==0 触发 restart
+            # 软等待（ufunc waiting_for_process）：勿因 last_success_ts==0 触发重启
             waiting = bool(getattr(mon, "waiting_for_process", False))
 
-            # 1) dead thread (still relevant during soft-wait if thread died)
+            # 1) 线程已死（软等待期间若线程挂掉仍需重启）
             if not mon.is_thread_alive():
                 reason = "dead_thread"
             elif waiting:
-                # intentionally waiting for process/binary — skip stale / no_success_yet
-                # still track error delta if collect path is thrashing
+                # 故意等待目标进程/二进制：跳过 stale / no_success_yet
+                # 采集路径若在疯狂报错，仍用错误增量触发
                 err = int(getattr(mon, "collect_error_count", 0) or 0)
                 delta = err - int(status.last_error_count_snapshot or 0)
                 status.last_error_count_snapshot = err
                 if delta >= self.watchdog_error_delta:
                     reason = "error_delta"
             else:
-                # 2) stale last_success
+                # 2) 成功采集时间过旧
                 interval = float(getattr(mon, "interval", 2) or 2)
                 stale_limit = interval * self.watchdog_stale_intervals
                 last_ok = float(getattr(mon, "last_success_ts", 0) or 0)
@@ -572,7 +572,7 @@ class eBPFMonitor:
                     reason = "stale_success"
                 elif last_ok == 0 and (now - started) > stale_limit:
                     reason = "no_success_yet"
-                # 3) error delta
+                # 3) 采集错误增量
                 err = int(getattr(mon, "collect_error_count", 0) or 0)
                 delta = err - int(status.last_error_count_snapshot or 0)
                 status.last_error_count_snapshot = err

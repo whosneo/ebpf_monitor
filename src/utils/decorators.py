@@ -101,9 +101,9 @@ def require_bpf_loaded(func):
     用于自动检查 self.bpf 状态，如果未加载则记录错误并返回 False。
     适用于所有需要eBPF程序加载后才能执行的方法。
 
-    例外（设计 4.3.2 soft-wait）：
+    例外（设计 4.3.2 软等待）：
     当 ``waiting_for_process`` 为 True 时允许进入（bpf 可为 None），
-    以便 run() 启动统计线程并在 _on_collect_tick 中重试 resolve+attach。
+    以便 run() 启动统计线程，并在 _on_collect_tick 中重试解析与 attach。
     """
 
     @functools.wraps(func)
@@ -112,7 +112,7 @@ def require_bpf_loaded(func):
         # 不可以使用 not self.bpf，部分系统 BPF 对象属性不同。
         bpf_missing = not hasattr(self, "bpf") or self.bpf is None
         if bpf_missing:
-            # soft-wait：允许 run/stop 与后续 tick 重试 attach
+            # 软等待：允许 run/stop 与后续 tick 重试 attach
             if getattr(self, "waiting_for_process", False):
                 return func(self, *args, **kwargs)
             logger = getattr(self, "logger", None)

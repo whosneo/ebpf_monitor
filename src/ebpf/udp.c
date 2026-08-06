@@ -59,7 +59,7 @@ struct udp_msg_info_t {
 };
 
 
-/* Optional PID whitelist (compiled when -DENABLE_PID_FILTER=1) */
+/* 可选 PID 白名单（编译时定义 -DENABLE_PID_FILTER=1 时生效） */
 BPF_HASH(pid_allow, u32, u8, 1024);
 
 static inline int allow_current(void) {

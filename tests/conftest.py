@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 try:
     import pytest
 except ImportError:
-    # Allow basic import/smoke when pytest not installed
+    # pytest 未安装时允许基本 import/冒烟
     class _DummyPytest:
         def fixture(self, *a, **k):
             def deco(f): return f
@@ -66,7 +66,7 @@ class MockTable(object):
         return list(self._data.items())
 
 
-# Mock bcc before any real imports that pull it
+# 在会拉取真实 bcc 的 import 之前注入 Mock
 class MockBPF:
     last_cflags = None  # type: ignore
     last_text = None  # type: ignore
@@ -107,14 +107,14 @@ class MockBPF:
         self._uretprobes.append((a, k))
 
 
-# Inject mock bcc into sys.modules before src imports.
-# Guard against double-load (pytest loads as "conftest"; tests may also
-# "import tests.conftest") so BaseMonitor's `from bcc import BPF` stays
-# bound to the same MockBPF class that tests assert against.
+# 在 src 导入前把 mock bcc 注入 sys.modules。
+# 防止双重加载（pytest 以 "conftest" 加载；测试也可能
+# "import tests.conftest"），保证 BaseMonitor 的 `from bcc import BPF`
+# 与测试断言使用同一 MockBPF 类。
 def _install_bcc_mock():
     existing = sys.modules.get("bcc")
     if existing is not None and getattr(existing, "BPF", None) is not None:
-        # Reuse already-installed mock class
+        # 复用已安装的 mock 类
         return getattr(existing, "BPF")
     mock_bcc = types.ModuleType("bcc")
     mock_bcc.BPF = MockBPF
@@ -126,9 +126,9 @@ def _install_bcc_mock():
 
 
 _ActiveMockBPF = _install_bcc_mock()
-# Alias for tests that import MockBPF from this module after double-load
+# 双重加载后，测试若再 import MockBPF，与已安装类对齐
 if _ActiveMockBPF is not MockBPF:
-    # Prefer the first-installed class for class-level last_cflags/instances
+    # 优先使用首次安装的类（共享 last_cflags / instances）
     MockBPF = _ActiveMockBPF  # noqa: F811
 
 
@@ -146,13 +146,13 @@ def monitor_context(mock_bpf):
     """Minimal MonitorContext substitute for unit tests."""
     from src.utils.monitor_context import MonitorContext
 
-    # Patch the real load
+    # 构造最小 MonitorContext 替身
     ctx = MagicMock(spec=MonitorContext)
     ctx.logger = MagicMock()
     ctx.output_controller = MagicMock()
-    ctx.ebpf_file_path = "src/ebpf/dummy.c"  # will be overridden in load tests
+    ctx.ebpf_file_path = "src/ebpf/dummy.c"  # load 测试中可覆盖
     ctx.compile_flags = []
-    # Inject a fake bpf for some tests
+    # 部分测试注入假 bpf
     ctx.bpf = mock_bpf
     return ctx
 

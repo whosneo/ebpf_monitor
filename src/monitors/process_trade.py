@@ -219,7 +219,7 @@ class ProcessTradeMonitor(BaseMonitor):
             out["min_latency_us"] = 0.0
             out["max_latency_us"] = 0.0
         else:
-            # syscall
+            # 系统调用统计行
             cat = out.get("syscall_category", out.get("category", SCAT_OTHER))
             out["category"] = category_to_str(cat)
             error_count = int(out.get("error_count") or 0)

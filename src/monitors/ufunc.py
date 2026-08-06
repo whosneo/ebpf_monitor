@@ -86,13 +86,13 @@ class UfuncMonitor(BaseMonitor):
         self._uprobe_available = True
         try:
             from bcc import BPF as _BPF  # noqa: F401
-            # MockBPF / real BCC both should expose attach_uprobe after our conftest
+            # 测试用 MockBPF 与真实 BCC 均应提供 attach_uprobe
             if not hasattr(_BPF, "attach_uprobe") and not callable(
                 getattr(_BPF, "__init__", None)
             ):
                 self._uprobe_available = False
         except Exception:
-            # bcc 已在 conftest 注入；真实环境缺失则软失败
+            # 测试中 bcc 已由 conftest 注入；真实环境缺失则后续软失败
             pass
 
     def _initialize(self, config):
@@ -181,8 +181,8 @@ int trace_ufunc_entry_{fid}(struct pt_regs *ctx) {{
 
     def _resolve_attach_specs(self):
         # type: () -> List[Dict[str, Any]]
-        """解析可 attach 的 specs（binary 存在）。"""
-        # 重建 from config if empty (retry after operator filled / process appeared)
+        """解析可挂载的规格列表（binary 文件存在时）。"""
+        # 规格为空时从配置重建（运维补全配置或进程出现后重试）
         if not self._attach_specs:
             self._build_attach_specs()
         resolved = []
@@ -210,12 +210,11 @@ int trace_ufunc_entry_{fid}(struct pt_regs *ctx) {{
 
         resolved = self._resolve_attach_specs()
         if not resolved:
-            # 无有效 binary：进入 soft-wait（仍算 load 成功，便于 run 循环重试）
+            # 无有效 binary：进入软等待（仍算 load 成功，便于 run 循环重试）
             self.waiting_for_process = True
             self.attached_count = 0
             self.logger.warning(
-                "ufunc: waiting_for_process (no valid binary yet); "
-                "will retry each interval"
+                "ufunc: 等待目标进程/二进制（尚无有效路径）；每个周期将重试"
             )
             return True
 
@@ -223,7 +222,7 @@ int trace_ufunc_entry_{fid}(struct pt_regs *ctx) {{
         self.waiting_for_process = False
         ok = super(UfuncMonitor, self).load_ebpf_program()
         if not ok:
-            # attach 全失败：仍可 soft-wait 重试（除非 uprobe 完全不可用）
+            # attach 全失败：仍可软等待重试（除非 uprobe 完全不可用）
             if self.uprobe_unavailable:
                 return False
             self.waiting_for_process = True
@@ -233,7 +232,7 @@ int trace_ufunc_entry_{fid}(struct pt_regs *ctx) {{
 
     def _retry_load_attach(self):
         # type: () -> None
-        """waiting_for_process 时每周期重试 resolve + load/attach。"""
+        """处于 waiting_for_process 时，每个周期重试解析路径并 load/attach。"""
         if self.attached_count > 0 and self.bpf is not None:
             self.waiting_for_process = False
             return
@@ -241,7 +240,7 @@ int trace_ufunc_entry_{fid}(struct pt_regs *ctx) {{
         if not resolved:
             return
         self._attach_specs = resolved
-        self.logger.info("ufunc: retrying load/attach after waiting_for_process")
+        self.logger.info("ufunc: 软等待结束后重试 load/attach")
         # 若已有 bpf，先 cleanup 再重建（符号/路径可能变化）
         if self.bpf is not None:
             try:
@@ -255,12 +254,12 @@ int trace_ufunc_entry_{fid}(struct pt_regs *ctx) {{
             if ok and self.attached_count > 0:
                 self.waiting_for_process = False
                 self.logger.info(
-                    "ufunc: attach succeeded after wait (count={})".format(
+                    "ufunc: 等待后 attach 成功 (count={})".format(
                         self.attached_count
                     )
                 )
         except Exception as e:
-            self.logger.warning("ufunc: retry load/attach failed: {}".format(e))
+            self.logger.warning("ufunc: 重试 load/attach 失败: {}".format(e))
 
     def _resolve_binary_from_pid(self):
         # type: () -> Optional[str]
@@ -282,7 +281,7 @@ int trace_ufunc_entry_{fid}(struct pt_regs *ctx) {{
 
     def _on_collect_tick(self):
         # type: () -> None
-        """运行时 pid_allow 刷新 + soft-wait 重试 attach。"""
+        """运行时刷新 pid_allow，并在软等待时重试 attach。"""
         if self.waiting_for_process or self.attached_count == 0:
             self._retry_load_attach()
         self._sync_pid_allow()
@@ -320,10 +319,10 @@ int trace_ufunc_entry_{fid}(struct pt_regs *ctx) {{
                 )
         self.attached_count = attached
         if attached == 0:
-            # soft-wait：不 raise，让 load 返回 True 并在 tick 重试
+            # 软等待：不抛异常，让 load 返回 True 并在 tick 中重试
             self.waiting_for_process = True
             self.uprobe_unavailable = False
-            self.logger.warning("ufunc: 0 probes attached; waiting_for_process")
+            self.logger.warning("ufunc: 未挂上任何探针；进入 waiting_for_process")
             return
 
     def _normalize_stat_row(self, stat_data, record_type):

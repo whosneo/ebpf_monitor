@@ -31,7 +31,7 @@ struct ufunc_entry_key_t {
 BPF_HASH(ufunc_stats, struct ufunc_stats_key_t, struct ufunc_stats_value_t, 10240);
 BPF_HASH(ufunc_entry, struct ufunc_entry_key_t, u64, 10240);
 
-/* Optional PID whitelist */
+/* 可选 PID 白名单 */
 BPF_HASH(pid_allow, u32, u8, 1024);
 
 static inline int allow_current(void) {
@@ -111,7 +111,7 @@ static inline void ufunc_ret_update(u32 func_id) {
         val->max_ns = latency;
 }
 
-/* count-only entry (no retprobe pairing) */
+/* 仅计数入口（不配对 uretprobe） */
 static inline void ufunc_entry_count_only(u32 func_id) {
     ufunc_count_entry(func_id);
 }

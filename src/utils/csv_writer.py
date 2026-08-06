@@ -28,12 +28,12 @@ if TYPE_CHECKING:
 def select_files_for_retention(files_with_mtime_size, max_age_days, max_total_bytes, max_files):
     # type: (List[tuple], float, int, int) -> List[str]
     """
-    纯函数：给定 [(path, mtime, size), ...] 返回应删除的 path 列表。
+    纯函数：给定 [(路径, 修改时间, 大小), ...]，返回应删除的路径列表。
 
     规则：
-    1) 超过 max_age_days 的删除（max_age_days<=0 表示不按年龄）
-    2) 按 mtime 新→旧排序后，超过 max_files 的旧文件删除
-    3) 总量超过 max_total_bytes 时继续删最旧
+    1) 超过 max_age_days 的删除（max_age_days<=0 表示不按年龄过滤）
+    2) 按 mtime 从新到旧排序后，超出 max_files 的旧文件删除
+    3) 总大小超过 max_total_bytes 时继续从最旧删起
     """
     now = time.time()
     to_delete = set()
@@ -49,7 +49,7 @@ def select_files_for_retention(files_with_mtime_size, max_age_days, max_total_by
                 kept.append((path, mtime, size))
         remaining = kept
 
-    # newest first
+    # 按修改时间从新到旧
     remaining.sort(key=lambda x: x[1], reverse=True)
 
     if max_files and max_files > 0 and len(remaining) > max_files:
@@ -59,7 +59,7 @@ def select_files_for_retention(files_with_mtime_size, max_age_days, max_total_by
 
     if max_total_bytes and max_total_bytes > 0:
         total = sum(s for _, _, s in remaining)
-        # delete oldest first among remaining
+        # 总量超限时从最旧文件开始删
         remaining_oldest_first = sorted(remaining, key=lambda x: x[1])
         idx = 0
         while total > max_total_bytes and idx < len(remaining_oldest_first):
@@ -224,17 +224,17 @@ class CsvWriter(object):
         max_total_bytes = int(max_total_mb * 1024 * 1024)
         max_files = int(cfg.get("max_files_per_monitor") or 64)
 
-        # group by monitor prefix (name before last _YYYYMMDD)
+        # 按监控器前缀分组（文件名去掉末尾 _YYYYMMDD_HHMMSS）
         by_monitor = {}  # type: Dict[str, List[tuple]]
         try:
             entries = list(self.output_dir.iterdir()) if hasattr(self.output_dir, "iterdir") else []
             if not entries:
-                # pathlib or str
+                # 兼容 pathlib 路径或普通字符串路径
                 root = str(self.output_dir)
                 if os.path.isdir(root):
                     entries = [Path(root) / n for n in os.listdir(root)]
         except Exception as e:
-            self.logger.error("retention list dir failed: {}".format(e))
+            self.logger.error("CSV 保留策略列举目录失败: {}".format(e))
             return []
 
         for entry in entries:
@@ -244,7 +244,7 @@ class CsvWriter(object):
                     continue
                 path = str(entry)
                 st = os.stat(path)
-                # monitor type: strip _YYYYMMDD_HHMMSS.csv
+                # 监控器类型：去掉 _YYYYMMDD_HHMMSS.csv 后缀
                 base = name[:-4]
                 parts = base.rsplit("_", 2)
                 mon = parts[0] if len(parts) >= 3 else base
@@ -261,10 +261,10 @@ class CsvWriter(object):
                 try:
                     os.remove(path)
                     deleted.append(path)
-                    self.logger.info("CSV retention deleted: {}".format(path))
+                    self.logger.info("CSV 保留策略删除: {}".format(path))
                 except OSError as e:
-                    # ENOSPC etc: log only, never sys.exit
-                    self.logger.error("CSV retention delete failed {}: {}".format(path, e))
+                    # 磁盘满等错误：仅记日志，禁止 sys.exit
+                    self.logger.error("CSV 保留策略删除失败 {}: {}".format(path, e))
         return deleted
 
     def cleanup(self):
