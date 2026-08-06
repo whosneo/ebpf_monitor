@@ -30,6 +30,7 @@ except ImportError:
 from .base import BaseMonitor
 from ..utils.monitor_data_utils import MonitorDataUtils
 from ..utils.decorators import register_monitor
+from ..utils.process_target_manager import ProcessTargetManager, decode_comm
 
 
 # ==================== UDP常量定义 ====================
@@ -117,9 +118,49 @@ class UdpMonitor(BaseMonitor):
         ["COMM", "DIR", "COUNT", "BYTES", "AVG_LAT", "MIN_LAT", "MAX_LAT", "THROUGHPUT"],
     )
 
+    def _initialize(self, config):
+        # type: (Dict[str, Any]) -> None
+        self.target_ports = list(config.get("target_ports") or [])
+        self.target_processes = list(config.get("target_processes") or [])
+        self.min_packet_size = int(config.get("min_packet_size") or 0)
+        self._ptm = ProcessTargetManager(self.target_processes, self.logger)
+        if self.target_ports:
+            self.logger.warning(
+                "udp: target_ports is configured but unsupported "
+                "(C key has no port field); filtering ignored (D22)"
+            )
+
+    def _pid_filter_targets_nonempty(self):
+        # type: () -> bool
+        return bool(self.target_processes)
+
+    def get_extra_cflags(self):
+        # type: () -> List[str]
+        if self._pid_filter_targets_nonempty():
+            return ["-DENABLE_PID_FILTER=1"]
+        return []
+
+    def _configure_ebpf_program(self):
+        # type: () -> None
+        self._sync_pid_allow()
+
+    def _sync_pid_allow(self):
+        # type: () -> None
+        if self._pid_filter_targets_nonempty() and self.bpf is not None:
+            self._ptm.refresh()
+            self._ptm.sync_pid_allow_map(self.bpf, "pid_allow")
+
+    def _on_collect_tick(self):
+        # type: () -> None
+        """运行时刷新 pid_allow，避免 load 后新起目标进程被内核丢弃。"""
+        self._sync_pid_allow()
+
     def should_collect(self, key, value):
         # type: (Any, Any) -> bool
         """判断是否应该收集数据"""
+        # 目标进程过滤（空列表 = 全部）
+        if not self._ptm.should_include_comm(getattr(key, "comm", b"")):
+            return False
         # 最小报文大小过滤
         if self.min_packet_size > 0:
             avg_bytes = value.total_bytes / value.count if value.count > 0 else 0

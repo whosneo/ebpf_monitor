@@ -58,12 +58,29 @@ struct udp_msg_info_t {
     char comm[TASK_COMM_LEN];  /* 进程名 */
 };
 
+
+/* Optional PID whitelist (compiled when -DENABLE_PID_FILTER=1) */
+BPF_HASH(pid_allow, u32, u8, 1024);
+
+static inline int allow_current(void) {
+#ifdef ENABLE_PID_FILTER
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    u8 *p = pid_allow.lookup(&pid);
+    if (!p)
+        return 0;
+    return 1;
+#else
+    return 1;
+#endif
+}
+
 /* BPF映射 */
 BPF_HASH(udp_stats, struct udp_stats_key_t, struct udp_stats_value_t, 10240);
 BPF_HASH(udp_start_ts, u64, struct udp_msg_info_t, 10240);
 
 /* 统计更新函数：更新UDP统计 */
 static inline void update_udp_stats(char *comm, u32 direction, u64 bytes, u64 ns) {
+    if (!allow_current()) return;
     struct udp_stats_key_t key = {};
     __builtin_memset(&key, 0, sizeof(key));
     bpf_probe_read(&key.comm, sizeof(key.comm), comm);

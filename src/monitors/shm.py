@@ -31,6 +31,7 @@ except ImportError:
 from .base import BaseMonitor
 from ..utils.monitor_data_utils import MonitorDataUtils
 from ..utils.decorators import register_monitor
+from ..utils.process_target_manager import ProcessTargetManager
 
 
 # ==================== SHM常量定义 ====================
@@ -130,6 +131,14 @@ class ShmMonitor(BaseMonitor):
         ["SHMID", "COMM", "COUNT", "ERRS", "ERR%", "AVG_LAT", "MIN_LAT", "MAX_LAT", "CONTENT"],
     )
 
+    def _initialize(self, config):
+        # type: (Dict[str, Any]) -> None
+        self.target_shmids = list(config.get("target_shmids") or [])
+        self.target_processes = list(config.get("target_processes") or [])
+        self.monitor_contention = config.get("monitor_contention", True)
+        self.monitor_barriers = config.get("monitor_barriers", False)
+        self._ptm = ProcessTargetManager(self.target_processes, self.logger)
+
     def should_collect(self, key, value):
         # type: (Any, Any) -> bool
         """判断是否应该收集数据"""
@@ -138,15 +147,8 @@ class ShmMonitor(BaseMonitor):
             if key.shmid not in self.target_shmids:
                 return False
 
-        # 目标进程过滤
-        if self.target_processes:
-            comm_str = key.comm.decode('utf-8', errors='replace').rstrip('\x00')
-            if comm_str not in self.target_processes:
-                return False
-
-        # 竞争监控过滤：仅在启用竞争监控时显示有竞争的段
-        if self.monitor_contention:
-            # 显示所有有操作的段（竞争率在输出时计算）
-            pass
+        # 目标进程过滤（空列表 = 全部）
+        if not self._ptm.should_include_comm(getattr(key, "comm", b"")):
+            return False
 
         return True

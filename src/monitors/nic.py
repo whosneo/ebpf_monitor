@@ -18,6 +18,7 @@
 from .base import BaseMonitor
 from ..utils.monitor_data_utils import MonitorDataUtils
 from ..utils.decorators import register_monitor
+from ..utils.process_target_manager import ProcessTargetManager
 
 
 def direction_to_str(direction):
@@ -106,9 +107,24 @@ class NicMonitor(BaseMonitor):
         ],
     }
 
+    def _initialize(self, config):
+        # type: (dict) -> None
+        """可选初始化"""
+        self.target_interfaces = list(config.get("target_interfaces") or [])
+        self.target_processes = list(config.get("target_processes") or [])
+        self._ptm = ProcessTargetManager(self.target_processes, self.logger)
+        if self.target_interfaces:
+            self.logger.warning(
+                "nic: target_interfaces is configured but unsupported "
+                "(C key has no interface field); filtering ignored (D22)"
+            )
+
     def should_collect(self, key, value):
         # type: (Any, Any) -> bool
         """过滤逻辑"""
+        if not self._ptm.should_include_comm(getattr(key, "comm", b"")):
+            return False
+
         if getattr(self, "min_queue_depth", 0) > 0:
             qe = getattr(value, "queue_events", 0)
             if qe < self.min_queue_depth:
@@ -121,10 +137,3 @@ class NicMonitor(BaseMonitor):
             if avg < self.min_latency_us:
                 return False
         return True
-
-    def _initialize(self, config):
-        # type: (dict) -> None
-        """可选初始化"""
-        self.target_interfaces = config.get("target_interfaces", [])
-        self.target_processes = config.get("target_processes", [])
-        # 更多过滤逻辑可在此扩展（如接口匹配）
