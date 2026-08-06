@@ -7,31 +7,25 @@
 采用统计模式，在内核态累积交易进程统计，定期批量输出。
 
 统计维度：
-- (进程名, 系统调用分类) -> (调用次数, 错误次数, 延迟统计)
-- (进程名, IPC类型) -> (调用次数, 延迟统计)
-
-支持的监控场景：
-- ZMB中间件UDP包处理速率监控
-- ZME撮合引擎系统调用模式分析
-- 交易进程IPC通信统计
-- 异常拒单检测（通过error_count统计）
+- process_trade_stats: (进程名, 系统调用分类) -> (调用次数, 错误次数, 延迟统计)
+- process_trade_ipc_stats: (进程名, IPC类型) -> (调用次数, 延迟统计)
 
 模式：STATISTICAL（统计聚合）
 """
 
-# 标准库导入
-import ctypes as ct
-
-# 兼容性导入
 try:
     from typing import Dict, List, Any
 except ImportError:
     from ..utils.py2_compat import Dict, List, Any
 
-# 本地模块导入
 from .base import BaseMonitor
 from ..utils.monitor_data_utils import MonitorDataUtils
 from ..utils.decorators import register_monitor
+from ..utils.process_target_manager import (
+    ProcessTargetManager,
+    decode_comm,
+    truncate_comm,
+)
 
 
 # ==================== 系统调用分类常量 ====================
@@ -44,6 +38,13 @@ SCAT_IPC = 5
 SCAT_TIME = 6
 SCAT_SIGNAL = 7
 SCAT_OTHER = 0
+
+IPC_TYPE_TO_CATEGORY = {
+    1: "IPC_PIPE",
+    2: "IPC_SHM",
+    3: "IPC_FUTEX",
+    4: "IPC_MSG",
+}
 
 
 def category_to_str(category):
@@ -59,7 +60,12 @@ def category_to_str(category):
         SCAT_SIGNAL: "SIGNAL",
         SCAT_OTHER: "OTHER",
     }
-    return categories.get(category, "UNKNOWN")
+    return categories.get(int(category) if category is not None else -1, "UNKNOWN")
+
+
+def ipc_type_to_category(ipc_type):
+    # type: (int) -> str
+    return IPC_TYPE_TO_CATEGORY.get(int(ipc_type) if ipc_type is not None else -1, "IPC_UNKNOWN")
 
 
 def calc_error_rate(count, error_count):
@@ -70,28 +76,22 @@ def calc_error_rate(count, error_count):
     return (error_count * 100.0) / count
 
 
-# ==================== 交易进程监控器 ====================
-
-
 @register_monitor("process_trade")
 class ProcessTradeMonitor(BaseMonitor):
-    """交易进程级监控器 - 统计聚合模式
-    
-    监控ZMB/ZME进程的系统调用和IPC通信统计。
-    使用 MonitorDataUtils 进行通用的数据处理和格式化。
-    """
+    """交易进程级监控器 - 统计聚合模式"""
 
-    # 配置模式定义
     CONFIG_SCHEMA = {
         "zmb_processes": {
             "type": list,
             "required": True,
             "item_type": str,
+            "default": [],
         },
         "zme_processes": {
             "type": list,
             "required": True,
             "item_type": str,
+            "default": [],
         },
         "monitor_syscalls": {
             "type": bool,
@@ -105,43 +105,136 @@ class ProcessTradeMonitor(BaseMonitor):
         },
     }
 
+    # 声明式 CSV：仅简单二元组（派生列在 _normalize_stat_row 写平）
     CSV_COLUMNS = [
+        ("record_type", "record_type"),
         ("comm", "comm"),
-        ("category", "syscall_category", category_to_str),
+        ("category", "category"),
         ("count", "count"),
         ("error_count", "error_count"),
-        ("error_rate", ("count", "error_count"), calc_error_rate),
-        ("avg_latency_us", ("total_ns", "count"), MonitorDataUtils.calc_avg_latency_us),
-        ("min_latency_us", "min_ns", MonitorDataUtils.calc_min_latency_us),
-        ("max_latency_us", "max_ns", MonitorDataUtils.calc_max_latency_us),
+        ("error_rate", "error_rate"),
+        ("avg_latency_us", "avg_latency_us"),
+        ("min_latency_us", "min_latency_us"),
+        ("max_latency_us", "max_latency_us"),
     ]
 
     CONSOLE_FORMAT = (
-        "{:<16} {:<10} {:>8} {:>8} {:>7.1f}% {:>10} {:>10} {:>10}",
+        "{:<8} {:<16} {:<12} {:>8} {:>8} {:>7.1f}% {:>10.1f} {:>10.1f} {:>10.1f}",
         [
+            "record_type",
             "comm",
-            ("syscall_category", category_to_str),
+            "category",
             "count",
             "error_count",
-            (("count", "error_count"), lambda c, e: calc_error_rate(c, e)),
-            (("total_ns", "count"), lambda tn, c: MonitorDataUtils.format_latency_ms(MonitorDataUtils.calc_avg_latency_us(tn, c))),
-            ("min_ns", lambda ns: MonitorDataUtils.format_latency_ms(MonitorDataUtils.calc_min_latency_us(ns))),
-            ("max_ns", lambda ns: MonitorDataUtils.format_latency_ms(MonitorDataUtils.calc_max_latency_us(ns))),
+            "error_rate",
+            "avg_latency_us",
+            "min_latency_us",
+            "max_latency_us",
         ],
-        ["COMM", "CATEGORY", "COUNT", "ERRORS", "ERR%", "AVG_LAT", "MIN_LAT", "MAX_LAT"],
+        ["TYPE", "COMM", "CATEGORY", "COUNT", "ERRORS", "ERR%", "AVG_LAT", "MIN_LAT", "MAX_LAT"],
     )
+
+    @classmethod
+    def validate_config(cls, config):
+        # type: (Dict[str, Any]) -> None
+        BaseMonitor.validate_config(config)
+        if not config.get("enabled"):
+            return
+        ms = config.get("monitor_syscalls", True)
+        mi = config.get("monitor_ipc", True)
+        if ms is False and mi is False:
+            raise ValueError(
+                "process_trade: monitor_syscalls and monitor_ipc cannot both be false"
+            )
+
+    def _initialize(self, config):
+        # type: (Dict[str, Any]) -> None
+        self.zmb_processes = list(config.get("zmb_processes") or [])
+        self.zme_processes = list(config.get("zme_processes") or [])
+        self.monitor_syscalls = config.get("monitor_syscalls", True)
+        self.monitor_ipc = config.get("monitor_ipc", True)
+
+        tables = []
+        if self.monitor_syscalls:
+            tables.append(("process_trade_stats", "syscall"))
+        if self.monitor_ipc:
+            tables.append(("process_trade_ipc_stats", "ipc"))
+        if not tables:
+            raise ValueError(
+                "process_trade: monitor_syscalls and monitor_ipc cannot both be false"
+            )
+        # 实例属性覆盖类属性（D24）
+        self.STATS_TABLES = tables
+
+        names = []
+        for n in self.zmb_processes + self.zme_processes:
+            t = truncate_comm(n)
+            if t and t not in names:
+                names.append(t)
+        self._ptm = ProcessTargetManager(names, self.logger)
+        self._pid_filter_enabled = bool(names)
+
+    def _pid_filter_targets_nonempty(self):
+        # type: () -> bool
+        return bool(self.zmb_processes or self.zme_processes)
+
+    def get_extra_cflags(self):
+        # type: () -> List[str]
+        if self._pid_filter_targets_nonempty():
+            return ["-DENABLE_PID_FILTER=1"]
+        return []
+
+    def _configure_ebpf_program(self):
+        # type: () -> None
+        self._sync_pid_allow()
+
+    def _sync_pid_allow(self):
+        # type: () -> None
+        if self._pid_filter_enabled and self.bpf is not None:
+            self._ptm.refresh()
+            self._ptm.sync_pid_allow_map(self.bpf, "pid_allow")
+
+    def _on_collect_tick(self):
+        # type: () -> None
+        """运行时刷新 pid_allow，避免 load 后新起目标进程被内核丢弃。"""
+        self._sync_pid_allow()
+
+    def _normalize_stat_row(self, stat_data, record_type):
+        # type: (Dict[str, Any], str) -> Dict[str, Any]
+        """写平 CSV 字段；IPC 的 error/min/max 为 0。"""
+        out = dict(stat_data)
+        out["record_type"] = record_type
+        out["comm"] = decode_comm(out.get("comm", ""))
+
+        count = int(out.get("count") or 0)
+        total_ns = int(out.get("total_ns") or 0)
+
+        if record_type == "ipc":
+            out["category"] = ipc_type_to_category(out.get("ipc_type", -1))
+            out["error_count"] = 0
+            out["error_rate"] = 0.0
+            out["avg_latency_us"] = MonitorDataUtils.calc_avg_latency_us(total_ns, count)
+            out["min_latency_us"] = 0.0
+            out["max_latency_us"] = 0.0
+        else:
+            # syscall
+            cat = out.get("syscall_category", out.get("category", SCAT_OTHER))
+            out["category"] = category_to_str(cat)
+            error_count = int(out.get("error_count") or 0)
+            out["error_count"] = error_count
+            out["error_rate"] = calc_error_rate(count, error_count)
+            out["avg_latency_us"] = MonitorDataUtils.calc_avg_latency_us(total_ns, count)
+            out["min_latency_us"] = MonitorDataUtils.calc_min_latency_us(
+                int(out.get("min_ns") or 0)
+            )
+            out["max_latency_us"] = MonitorDataUtils.calc_max_latency_us(
+                int(out.get("max_ns") or 0)
+            )
+        out["count"] = count
+        return out
 
     def should_collect(self, key, value):
         # type: (Any, Any) -> bool
-        """判断是否应该收集数据"""
-        # 系统调用监控过滤
-        if not self.monitor_syscalls:
-            return False
-
-        # 进程角色过滤：仅监控配置的ZMB/ZME进程
-        comm_str = key.comm.decode('utf-8', errors='replace').rstrip('\x00')
-        all_target = self.zmb_processes + self.zme_processes
-        if all_target and comm_str not in all_target:
-            return False
-
-        return True
+        """进程名过滤；空 zmb+zme = 全部。"""
+        comm = decode_comm(getattr(key, "comm", b""))
+        return self._ptm.should_include_comm(comm)

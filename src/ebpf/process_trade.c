@@ -6,8 +6,8 @@
  * 3. 角色识别：区分ZMB/ZME进程，提供交易特定的性能指标
  *
  * 监控维度：
- * - trade_syscall_stats: (进程名, 系统调用分类) -> (次数, 错误次数, 延迟统计)
- * - trade_ipc_stats: (进程名, IPC类型) -> (次数, 延迟统计)
+ * - process_trade_stats: (进程名, 系统调用分类) -> (次数, 错误次数, 延迟统计)
+ * - process_trade_ipc_stats: (进程名, IPC类型) -> (次数, 延迟统计)
  *
  * 使用的Tracepoint：
  * - raw_syscalls:sys_enter: 系统调用入口（记录开始时间）
@@ -74,10 +74,26 @@ struct syscall_start_info_t {
     u64 syscall_nr;
 };
 
+
+/* Optional PID whitelist (compiled when -DENABLE_PID_FILTER=1) */
+BPF_HASH(pid_allow, u32, u8, 1024);
+
+static inline int allow_current(void) {
+#ifdef ENABLE_PID_FILTER
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    u8 *p = pid_allow.lookup(&pid);
+    if (!p)
+        return 0;
+    return 1;
+#else
+    return 1;
+#endif
+}
+
 /* BPF映射 */
-BPF_HASH(trade_syscall_stats, struct trade_stats_key_t, struct trade_stats_value_t, 10240);
-BPF_HASH(trade_ipc_stats, struct trade_ipc_key_t, struct trade_ipc_value_t, 10240);
-BPF_HASH(trade_syscall_start, u64, struct syscall_start_info_t, 10240);
+BPF_HASH(process_trade_stats, struct trade_stats_key_t, struct trade_stats_value_t, 10240);
+BPF_HASH(process_trade_ipc_stats, struct trade_ipc_key_t, struct trade_ipc_value_t, 10240);
+BPF_HASH(process_trade_start, u64, struct syscall_start_info_t, 10240);
 
 /* 系统调用分类函数 */
 static inline u32 classify_syscall(u64 nr) {
@@ -167,11 +183,11 @@ static inline void update_trade_stats(u32 category, s64 ret_val, u64 latency_ns)
     key.syscall_category = category;
 
     /* lookup→update→lookup模式，兼容3.10内核 */
-    struct trade_stats_value_t *val = trade_syscall_stats.lookup(&key);
+    struct trade_stats_value_t *val = process_trade_stats.lookup(&key);
     if (!val) {
         struct trade_stats_value_t zero = {};
-        trade_syscall_stats.update(&key, &zero);
-        val = trade_syscall_stats.lookup(&key);
+        process_trade_stats.update(&key, &zero);
+        val = process_trade_stats.lookup(&key);
         if (!val) {
             return;
         }
@@ -204,11 +220,11 @@ static inline void update_ipc_stats(u32 ipc_type, u64 latency_ns) {
     __builtin_memcpy(key.comm, comm, TASK_COMM_LEN);
     key.ipc_type = ipc_type;
 
-    struct trade_ipc_value_t *val = trade_ipc_stats.lookup(&key);
+    struct trade_ipc_value_t *val = process_trade_ipc_stats.lookup(&key);
     if (!val) {
         struct trade_ipc_value_t zero = {};
-        trade_ipc_stats.update(&key, &zero);
-        val = trade_ipc_stats.lookup(&key);
+        process_trade_ipc_stats.update(&key, &zero);
+        val = process_trade_ipc_stats.lookup(&key);
         if (!val) {
             return;
         }
@@ -228,6 +244,7 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter) {
     u32 pid = pid_tgid >> 32;
 
     if (pid == 0) return 0;
+    if (!allow_current()) return 0;
 
     u64 syscall_nr = 0;
     if (args) {
@@ -238,7 +255,7 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter) {
     struct syscall_start_info_t info = {};
     info.start_ts = bpf_ktime_get_ns();
     info.syscall_nr = syscall_nr;
-    trade_syscall_start.update(&pid_tgid, &info);
+    process_trade_start.update(&pid_tgid, &info);
 
     return 0;
 }
@@ -249,9 +266,10 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit) {
     u32 pid = pid_tgid >> 32;
 
     if (pid == 0) return 0;
+    if (!allow_current()) return 0;
 
     /* 查找开始时间 */
-    struct syscall_start_info_t *start = trade_syscall_start.lookup(&pid_tgid);
+    struct syscall_start_info_t *start = process_trade_start.lookup(&pid_tgid);
     if (!start) return 0;
 
     u64 latency_ns = bpf_ktime_get_ns() - start->start_ts;
@@ -280,7 +298,7 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit) {
     }
 
     /* 清理临时数据 */
-    trade_syscall_start.delete(&pid_tgid);
+    process_trade_start.delete(&pid_tgid);
 
     return 0;
 }
