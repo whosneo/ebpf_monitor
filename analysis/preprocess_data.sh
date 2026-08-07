@@ -387,7 +387,7 @@ main() {
         local monitor_type=""
         
         # 提取监控器类型
-        if [[ $basename =~ ^(exec|syscall|bio|interrupt|func|open|page_fault|context_switch)_ ]]; then
+        if [[ $basename =~ ^(exec|syscall|bio|interrupt|kfunc|func|open|page_fault|context_switch)_ ]]; then
             monitor_type="${BASH_REMATCH[1]}"
             
             # 如果指定了监控器类型，只处理该类型

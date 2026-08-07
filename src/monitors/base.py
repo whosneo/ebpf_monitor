@@ -56,7 +56,7 @@ class MonitorMode(Enum):
     - STATISTICAL: 统计聚合模式，定期从内核BPF表读取聚合数据
     - EVENT: 事件驱动模式，实时处理perf_buffer事件
     """
-    STATISTICAL = "statistical"  # 统计聚合模式（bio, syscall, func, interrupt, page_fault, context_switch, open）
+    STATISTICAL = "statistical"  # 统计聚合模式（bio, syscall, kfunc, interrupt, page_fault, context_switch, open）
     EVENT = "event"  # 事件驱动模式（exec）
 
 

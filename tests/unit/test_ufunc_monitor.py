@@ -40,13 +40,17 @@ def test_default_enabled_false_in_schema():
     assert "targets" in cfg
 
 
-def test_func_still_kprobe_only():
-    """Structural: kernel func monitor still kprobe/kallsyms."""
+def test_kfunc_still_kprobe_only():
+    """Structural: kernel kfunc monitor still kprobe/kallsyms (not uprobe)."""
     from pathlib import Path
-    func_py = Path("src/monitors/func.py").read_text()
-    assert "attach_kprobe" in func_py
-    assert "attach_uprobe" not in func_py
-    assert "/proc/kallsyms" in func_py
+    kfunc_py = Path("src/monitors/kfunc.py").read_text()
+    assert "attach_kprobe" in kfunc_py
+    assert "attach_uprobe" not in kfunc_py
+    assert "/proc/kallsyms" in kfunc_py
+    assert '@register_monitor("kfunc")' in kfunc_py
+    kfunc_c = Path("src/ebpf/kfunc.c").read_text()
+    assert "BPF_HASH(kfunc_stats," in kfunc_c
+    assert "BPF_HASH(func_stats," not in kfunc_c
 
 
 def test_ufunc_c_entry_key_struct():

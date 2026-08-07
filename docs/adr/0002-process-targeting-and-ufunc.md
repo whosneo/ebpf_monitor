@@ -12,7 +12,7 @@
 
 ## 决策
 
-1. **新建 `ufunc` 监控器**，不把内核 `func` 改为 uprobe。
+1. **新建 `ufunc` 监控器**，不把内核 `kfunc`（原 `func`）改为 uprobe。
 2. **BCC `attach_uprobe` / `attach_uretprobe` 允许**，作为 BCC 原生 attach；禁止为此引入 libbpf/CO-RE。
 3. **ProcessTargetManager** 统一进程名匹配；空列表 = 全部允许。
 4. **BPF `pid_allow`** 写新后删旧；`get_extra_cflags()` 返回 `-DENABLE_PID_FILTER=1`，禁止改共享 compile_flags。

@@ -327,7 +327,7 @@
       "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "title": "内核函数调用",
       "type": "timeseries",
-      "targets": [{ "expr": "ebpf_monitor_func_call_count", "legendFormat": "{{ comm }} ({{ func_name }})", "refId": "A" }]
+      "targets": [{ "expr": "ebpf_monitor_kfunc_call_count", "legendFormat": "{{ comm }} ({{ func_name }})", "refId": "A" }]
     }
   ],
   "refresh": "10s",

@@ -197,7 +197,7 @@ server2:
 **监控器类型选项：**
 - `exec` - 进程执行监控
 - `bio` - 块I/O监控
-- `func` - VFS函数调用监控
+- `kfunc` - 内核函数 kprobe 监控（VFS 等）
 - `open` - 文件打开监控
 - `syscall` - 系统调用监控
 - `interrupt` - 中断监控

@@ -19,7 +19,7 @@
 
 - **exec**: 进程执行监控
 - **bio**: 块I/O操作监控（原io监控器）
-- **func**: VFS函数调用监控
+- **kfunc**: 内核函数 kprobe 监控（VFS 等）
 - **open**: 文件打开操作监控
 - **syscall**: 系统调用监控
 - **interrupt**: 中断监控
@@ -49,7 +49,7 @@ python3 analyzer.py --date 20251103 --output-dir /path/to/output --daily-dir /pa
 ### 命令行参数
 
 - `--date`: 分析日期，格式为YYYYMMDD（必需）
-- `--type`: 监控器类型，可选值: exec, bio, func, open, syscall, interrupt, page_fault, all（默认: all）
+- `--type`: 监控器类型，可选值: exec, bio, kfunc, open, syscall, interrupt, page_fault, all（默认: all）
 - `--output-dir`: output目录路径（默认: ../output）
 - `--daily-dir`: daily_data目录路径（默认: ./daily_data）
 

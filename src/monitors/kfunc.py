@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # encoding: utf-8
 """
-内核函数监控器
+内核函数监控器（kfunc）
 
-监控指定模式的内核函数调用。
+监控指定模式的内核函数调用（kprobe）。
 """
 
 # 标准库导入
@@ -24,9 +24,9 @@ from .base import BaseMonitor
 from ..utils.decorators import register_monitor
 
 
-@register_monitor("func")
-class FuncMonitor(BaseMonitor):
-    """内核函数监控器"""
+@register_monitor("kfunc")
+class KfuncMonitor(BaseMonitor):
+    """内核函数监控器（kprobe）"""
 
     # 配置模式定义
     # patterns: 内核函数名匹配模式列表，支持通配符*和?
@@ -107,14 +107,14 @@ class FuncMonitor(BaseMonitor):
         if not self.matched_functions:
             raise RuntimeError("没有匹配的函数")
 
-        template_code = super(FuncMonitor, self).get_ebpf_code()
+        template_code = super(KfuncMonitor, self).get_ebpf_code()
 
         # 生成探针函数代码
         probe_functions = ""
         for func_id in self.matched_functions.keys():
             probe_functions += '''
-int trace_func_{func_id} (struct pt_regs *ctx) {{
-    update_func_stats(ctx, {func_id});
+int trace_kfunc_{func_id} (struct pt_regs *ctx) {{
+    update_kfunc_stats(ctx, {func_id});
     return 0;
 }}
 '''.format(func_id=func_id)
@@ -128,7 +128,7 @@ int trace_func_{func_id} (struct pt_regs *ctx) {{
         attached_count = 0
         for func_id, func_name in self.matched_functions.items():
             try:
-                self.bpf.attach_kprobe(event=func_name, fn_name="trace_func_{}".format(func_id))
+                self.bpf.attach_kprobe(event=func_name, fn_name="trace_kfunc_{}".format(func_id))
                 attached_count += 1
                 self.logger.debug("成功附加探针到函数 {}".format(func_name))
             except Exception as e:

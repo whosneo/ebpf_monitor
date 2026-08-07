@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-orange)](https://www.kernel.org/)
 [![Kernel](https://img.shields.io/badge/kernel-3.10%2B-orange)](https://www.kernel.org/)
 
-基于 eBPF + BCC 的 eBPF 监控系统。当前支持 13 个监控器（含 ufunc 用户态函数、nic 低延时网卡 for SWIFT-2200N：exec、open、bio、syscall、func、interrupt、page_fault、context_switch、udp、shm、process_trade、nic、ufunc），以聚合统计模式为主，支持控制台/CSV 输出（PROMETHEUS_CONFIG 辅助；无内置 HTTP exporter）。
+基于 eBPF + BCC 的 eBPF 监控系统。当前支持 13 个监控器（含 ufunc 用户态函数、nic 低延时网卡 for SWIFT-2200N：exec、open、bio、syscall、kfunc、interrupt、page_fault、context_switch、udp、shm、process_trade、nic、ufunc），以聚合统计模式为主，支持控制台/CSV 输出（PROMETHEUS_CONFIG 辅助；无内置 HTTP exporter）。
 
 **nic（低延时网卡）**：已实现（针对 SWIFT-2200N 等中科驭数低延时卡），默认 `enabled: false`，driver-specific 符号为占位，待真实硬件上完成验证后启用。
 
@@ -15,7 +15,7 @@
 - **输出**：单监控器支持控制台+CSV；多监控器以 CSV 为主。`PROMETHEUS_CONFIG` 声明式指标提取辅助；**无内置 Prometheus HTTP exporter**（勿依赖 9200 端口 unless 自行接入）。Grafana/alert 配置文件在 `config/` 供外部接入。
 - **架构**：依赖注入（ApplicationContext），监控器通过 @register_monitor 自动注册，声明式 CONFIG_SCHEMA + CSV/CONSOLE/PROMETHEUS_CONFIG。
 - **硬约束**：持续使用 BCC + kprobe/tracepoint（ufunc 为 BCC uprobe），兼容内核 3.10+ 路线；不迁移 CO-RE。
-- **分析工具**：analysis/analyzer.py 支持 exec/bio/syscall/open/func/interrupt/page_fault/nic/udp/process_trade/ufunc 列表接入（深度分析因类型而异）。
+- **分析工具**：analysis/analyzer.py 支持 exec/bio/syscall/open/kfunc/interrupt/page_fault/nic/udp/process_trade/ufunc 列表接入（深度分析因类型而异）。
 
 ## 快速开始
 

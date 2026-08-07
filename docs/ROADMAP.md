@@ -1,6 +1,6 @@
 # eBPF 监控系统 - 当前状态与下一阶段工作
 
-**最后更新**：2026-08-06（实现 design: 长期稳定 + 多进程目标 + ufunc）
+**最后更新**：2026-08-07（func → kfunc 全仓重命名；此前：长期稳定 + 多进程目标 + ufunc）
 
 本文档是项目下一阶段工作的**唯一真相来源**。只记录当前真实事实和有明确验收标准的短期目标，不包含任何未来愿景或长期规划。
 
@@ -11,7 +11,7 @@
 **当前支持的监控器（共 13 个）**：
 - **exec**：进程执行监控（事件模式）。
 - **open / bio / syscall / interrupt / page_fault / context_switch**：系统级聚合统计。
-- **func**：内核函数 kprobe（`/proc/kallsyms`），**不是**用户态 uprobe。
+- **kfunc**：内核函数 kprobe（`/proc/kallsyms`），**不是**用户态 uprobe；代码/配置/注册名均为 `kfunc`（map `kfunc_stats`）。
 - **udp / shm / nic / process_trade**：可按进程名过滤（ProcessTargetManager）；udp/nic 的 `target_ports` / `target_interfaces` **未实现内核过滤**（非空配置打 WARNING）。
 - **process_trade**：map 为 `process_trade_stats` + `process_trade_ipc_stats`；支持 `monitor_syscalls` / `monitor_ipc` 门控；**pre-fix 版本曾因 map 名不一致导致空 CSV**。
 - **ufunc**（新建）：BCC uprobe/uretprobe 用户态函数统计；默认 `enabled: false`；符号/路径由运维提供；uprobe 不可用时软失败。

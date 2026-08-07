@@ -5,7 +5,7 @@
 本工具是 eBPF 监控系统，基于 eBPF + BCC，支持 12 个监控器（详见 docs/ROADMAP.md；含 nic 低延时网卡针对 SWIFT-2200N）。以聚合统计模式为主（数据量大幅减少），支持控制台、CSV、Prometheus 输出。兼容 Python 2.7+/3.7+ 与内核 3.10+。
 
 **已支持监控器**（当前真实状态）：
-- exec、open、bio、syscall、func、interrupt、page_fault、context_switch、udp（方向/延迟/端口过滤）、shm（竞争率）、特定进程（process_trade，专用）、nic（低延时网卡）。
+- exec、open、bio、syscall、kfunc（内核 kprobe）、interrupt、page_fault、context_switch、udp（方向/延迟/端口过滤）、shm（竞争率）、特定进程（process_trade，专用）、nic（低延时网卡）、ufunc（用户态 uprobe，默认 disabled）。
 
 **nic（低延时网卡）**：已实现（队列深度相关统计、缓冲区、延迟），针对 SWIFT-2200N。默认 `enabled: false`（driver-specific 符号为占位，待真实硬件验证后启用），可用 `-m nic` 显式运行。辅助采集工具 collect_nic_metrics.py 已支持 SWIFT-2200N。
 
@@ -49,7 +49,7 @@ prometheus --config.file=config/prometheus.yml
   cd analysis
   python analyzer.py --date 20260615 --type nic
   ```
-  analyzer 支持 exec/bio/syscall/open/func/interrupt/page_fault/nic 的完整排名、延迟分布等（每次 `--type` 只能指定单个监控器，或用 `--type all` 分析全部；nic 当前为基础统计，队列深度分析与 spike 报告自动集成计划在 Phase 5 进一步增强；udp/process_trade 暂未接入 analyzer，仅有 CSV/Prometheus 输出）。
+  analyzer 支持 exec/bio/syscall/open/kfunc/interrupt/page_fault/nic 的完整排名、延迟分布等（每次 `--type` 只能指定单个监控器，或用 `--type all` 分析全部；nic 当前为基础统计，队列深度分析与 spike 报告自动集成计划在 Phase 5 进一步增强；udp/process_trade 暂未接入 analyzer，仅有 CSV/Prometheus 输出）。
 
 报告默认保存到 reports/<hostname>/。
 

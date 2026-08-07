@@ -27,7 +27,7 @@
 
 本项目是基于 **eBPF + BCC** 的 Linux 监控系统，面向交易环境（ZMB/ZME 中间件、低延时网卡 SWIFT-2200N、UDP、SHM 等），当前已有 12 个监控器、守护进程模式、CSV/Console 输出，以及声明式 `PROMETHEUS_CONFIG` 提取辅助（**无**内置 HTTP exporter，见 §9）。用户目标是：在运行交易系统的服务器上**长期稳定运行**，依赖 eBPF 持续采集性能数据，并支持对**指定名称的多个进程**采集其内部函数调用与系统级信息。
 
-与目标对照后，核心缺口有三：（1）`func` 仅做**内核 kprobe**，无用户态 uprobe；（2）进程名过滤分散且部分配置项声明后未生效；（3）守护进程与多监控器运行时缺少健康度、隔离重启、map 压力、磁盘保留，难以作为生产常驻进程。
+与目标对照后，核心缺口有三：（1）`kfunc` 仅做**内核 kprobe**，无用户态 uprobe；（2）进程名过滤分散且部分配置项声明后未生效；（3）守护进程与多监控器运行时缺少健康度、隔离重启、map 压力、磁盘保留，难以作为生产常驻进程。
 
 本设计在**不迁移 CO-RE/libbpf**、不改项目身份的前提下，给出可分阶段、可验收、可按 PR 落地的实现路径：统一 `ProcessTargetManager`、新增 `ufunc`、增强 `eBPFMonitor`/输出层稳定性，并修复已发现的数据通路与死配置缺陷。
 
@@ -71,7 +71,7 @@ main.py
 | open | STAT | min_count / show_errors | 系统级 |
 | bio | STAT | min_latency_us | 系统级 |
 | syscall | STAT | categories / errors | 系统级 |
-| **func** | STAT | patterns / probe_limit | **仅内核 kprobe**，`/proc/kallsyms` |
+| **kfunc** | STAT | patterns / probe_limit | **仅内核 kprobe**，`/proc/kallsyms` |
 | interrupt | STAT | — | 系统级 |
 | page_fault | STAT | — | 系统级 |
 | context_switch | STAT | min_switches | 系统级 |
@@ -84,7 +84,7 @@ main.py
 
 #### A. 用户态函数调用 — 完全缺失
 
-- `src/monitors/func.py` + `src/ebpf/func.c`：kprobe only。
+- `src/monitors/kfunc.py` + `src/ebpf/kfunc.c`：kprobe only。
 - 仓库内 **零** `attach_uprobe` / `attach_uretprobe` 用法。
 
 #### B. 按名称多进程目标 — 碎片化且有 bug
@@ -136,7 +136,7 @@ main.py
    - Phase 2：BPF `pid_allow`（写新后删旧，禁止先 clear）。
 
 3. **用户态函数 `ufunc`**  
-   - BCC uprobe/uretprobe，统计模式；默认 `enabled: false`；不改 `func`。
+   - BCC uprobe/uretprobe，统计模式；默认 `enabled: false`；不改 `kfunc`。
 
 4. **修复已知数据通路与死配置**  
    - process_trade map + 显式 IPC/syscall 行模型；`monitor_syscalls`/`monitor_ipc` 门控。  
@@ -152,8 +152,8 @@ main.py
 | ufunc 首期 USDT / stack / EVENT 模式 | 防 scope creep |
 | 强制删除 Python 2 兼容层 | 非本阶段 |
 | 自动逆向 strip 二进制 | 需用户符号/偏移 |
-| 改主 yaml 把 syscall/func/open/bio 默认改 false | 仅 trading profile |
-| 改变 `func` 为 uprobe | 用 `ufunc` |
+| 改主 yaml 把 syscall/kfunc/open/bio 默认改 false | 仅 trading profile |
+| 改变 `kfunc` 为 uprobe | 用 `ufunc` |
 | 复用已 `cleanup` 的 monitor 实例做 restart | `_cleaned_up` 永久 |
 
 ---
@@ -513,7 +513,7 @@ app:
 #### 4.4.5 默认配置与 trading profile
 
 - 新增 `config/monitor_config.trading_server.yaml`（减负）。  
-- **禁止** 在未单独产品决策时把主 `monitor_config.yaml` 里 syscall/func/open/bio 默认改为 false（D11 + 护栏 18）。  
+- **禁止** 在未单独产品决策时把主 `monitor_config.yaml` 里 syscall/kfunc/open/bio 默认改为 false（D11 + 护栏 18）。  
 
 **D13 空 targets 强制路径（锁定，路径 A——无 environment 穿线）**：
 
@@ -718,7 +718,7 @@ monitors:
 
 ## 7. Alternatives Considered
 
-### 7.1 扩展 `func` 同时 kprobe+uprobe
+### 7.1 扩展 `kfunc` 同时 kprobe+uprobe
 
 破坏语义 → **拒绝**；新建 `ufunc`。
 
@@ -937,7 +937,7 @@ Phase 4：依赖日志/健康 JSON 的人工或外部 log 检查。
 | # | 决策 | 理由 |
 |---|------|------|
 | D1 | 不迁移 CO-RE/libbpf | ADR 0001 |
-| D2 | 新建 `ufunc`，不改 `func` | 失败域分离 |
+| D2 | 新建 `ufunc`，不改 `kfunc` | 失败域分离 |
 | D3 | 统计聚合为主 | 交易机高频 |
 | D4 | 共享 ProcessTargetManager | 去重与修死配置 |
 | D5 | 空 target = 全部；非空 = 白名单 | 与 shm 一致 |
@@ -970,7 +970,7 @@ Phase 4：依赖日志/健康 JSON 的人工或外部 log 检查。
 
 1. **禁止** libbpf、CO-RE、cilium、bpftrace 作主路径。  
 2. **禁止** 未更新 ROADMAP/ADR 合并新监控器类型。  
-3. **禁止** 改 `func` 为 uprobe。  
+3. **禁止** 改 `kfunc` 为 uprobe。  
 4. **必须** 新监控器：`.c` + `.py` + register + SCHEMA + unit test + yaml。  
 5. **必须** map 名 = `{type}_stats`（IPC 附属 map 用 `{type}_ipc_stats`）。  
 6. **必须** 继承 BaseMonitor；多表只用 `STATS_TABLES`。  
@@ -985,7 +985,7 @@ Phase 4：依赖日志/健康 JSON 的人工或外部 log 检查。
 15. 不 shell 拼接配置；binary 校验存在。  
 16. **ufunc PR 禁止** 增加 USDT、stack walk、EVENT/perf_buffer 模式。  
 17. **任何新 attach API 必须扩展** `tests/conftest.py` MockBPF。  
-18. **禁止** 在主 `monitor_config.yaml` 将 syscall/func/open/bio 默认改为 false，除非独立产品决策 PR；减负只加 trading profile。  
+18. **禁止** 在主 `monitor_config.yaml` 将 syscall/kfunc/open/bio 默认改为 false，除非独立产品决策 PR；减负只加 trading profile。  
 19. **禁止** `restart_monitor` 复用已 cleanup 实例。  
 20. **禁止** `sync_pid_allow_map` clear-first。  
 21. **禁止** 改 process_trade CSV 列集合偏离 §4.4.6。  
@@ -1032,8 +1032,8 @@ Phase 4：依赖日志/健康 JSON 的人工或外部 log 检查。
 ## 16. References
 
 - `docs/adr/0001-...`、`docs/ROADMAP.md`、`docs/ARCHITECTURE.md`、`docs/USER_GUIDE.md`  
-- `src/monitors/base.py`、`func.py`、`process_trade.py`、`udp.py`、`nic.py`、`shm.py`  
-- `src/ebpf/process_trade.c`、`func.c`、`udp.c`  
+- `src/monitors/base.py`、`kfunc.py`、`process_trade.py`、`udp.py`、`nic.py`、`shm.py`  
+- `src/ebpf/process_trade.c`、`kfunc.c`、`udp.c`  
 - `src/ebpf_monitor.py`、`daemon_manager.py`、`output_controller.py`、`csv_writer.py`  
 - `tests/conftest.py`  
 - BCC uprobe API（本机 bcc 版本文档）

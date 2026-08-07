@@ -82,7 +82,7 @@ monitors:
       ipc: true
     show_errors_only: false
 
-  func:
+  kfunc:
     enabled: false
     interval: 2
     patterns: ["vfs_read", "vfs_write"]

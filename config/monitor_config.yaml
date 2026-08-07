@@ -84,8 +84,8 @@ monitors:
       ipc: true              # 进程间通信系统调用
     show_errors_only: false  # 只显示有错误的调用
 
-  # 内核函数监控
-  func:
+  # 内核函数监控（kfunc / kprobe）
+  kfunc:
     enabled: true
     interval: 2
     patterns: [ "vfs_read", "vfs_write" ]

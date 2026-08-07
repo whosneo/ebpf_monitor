@@ -69,7 +69,7 @@ class EBPFAnalyzer:
         self.reports_dir = os.path.join(reports_dir, self.hostname)
         self.base_reports_dir = reports_dir  # 保存基础reports目录，用于对比功能
         # 更新监控器类型列表
-        self.monitor_types = ['exec', 'syscall', 'bio', 'interrupt', 'func', 'open', 'page_fault', 'nic', 'udp', 'process_trade', 'ufunc']
+        self.monitor_types = ['exec', 'syscall', 'bio', 'interrupt', 'kfunc', 'open', 'page_fault', 'nic', 'udp', 'process_trade', 'ufunc']
 
         # 确保目录存在
         if not os.path.exists(self.daily_data_dir):
@@ -189,7 +189,7 @@ class EBPFAnalyzer:
             if 'operation' in df.columns:
                 df['operation'] = df['operation'].astype(str).str.strip()
 
-        elif monitor_type == 'func':
+        elif monitor_type == 'kfunc':
             # 确保func_name是字符串类型
             if 'func_name' in df.columns:
                 df['func_name'] = df['func_name'].astype(str).str.strip()
@@ -546,16 +546,16 @@ class EBPFAnalyzer:
                 for i, (comm, tput) in enumerate(throughput_procs.items(), 1):
                     print(f"  {i:3d}. {comm:30s} {tput:10,.2f} MB/s")
 
-    # ==================== FUNC 分析 ====================
+    # ==================== KFUNC 分析 ====================
     @capture_output_to_file
-    def analyze_func(self, date_str: str):
-        """分析FUNC数据（VFS函数调用）"""
-        df = self.load_daily_data(date_str, 'func')
+    def analyze_kfunc(self, date_str: str):
+        """分析 kfunc 数据（内核函数 kprobe / VFS 等）"""
+        df = self.load_daily_data(date_str, 'kfunc')
         if df is None or df.empty:
             return
 
         print(f"\n{'=' * 100}")
-        print(f"FUNC (VFS函数) 监控数据深度分析 - {date_str}")
+        print(f"KFUNC (内核函数) 监控数据深度分析 - {date_str}")
         print(f"{'=' * 100}\n")
 
         # 基本统计
@@ -1460,7 +1460,7 @@ if __name__ == '__main__':
     parser.add_argument('--daily-dir', default='./daily_data', help='预处理数据目录路径')
     parser.add_argument('--reports-dir', default='./reports', help='分析报告输出目录')
     parser.add_argument('--date', required=True, help='分析日期，格式: YYYYMMDD')
-    parser.add_argument('--type', choices=['exec', 'bio', 'func', 'open', 'syscall', 'interrupt', 'page_fault', 'nic', 'all'],
+    parser.add_argument('--type', choices=['exec', 'bio', 'kfunc', 'open', 'syscall', 'interrupt', 'page_fault', 'nic', 'all'],
                         default='all', help='监控器类型')
     parser.add_argument('--hostname', help='指定主机名（默认使用当前主机名）')
 

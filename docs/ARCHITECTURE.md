@@ -7,7 +7,7 @@
 ## 当前真实状态
 
 **支持的监控器（13 个，当前真实状态）**：
-exec（事件）、open、bio、syscall、func（内核 kprobe）、interrupt、page_fault、context_switch、udp、shm、process_trade、nic、**ufunc**（BCC uprobe，默认 disabled）。
+exec（事件）、open、bio、syscall、**kfunc**（内核 kprobe）、interrupt、page_fault、context_switch、udp、shm、process_trade、nic、**ufunc**（BCC uprobe，默认 disabled）。
 
 **nic（低延时网卡）**：已实现（聚合统计，关注队列深度/缓冲区/延迟，针对 SWIFT-2200N）。默认 `enabled: false`，driver-specific 符号为占位，待真实硬件验证后启用；辅助采集 collect_nic_metrics.py 已支持。
 
